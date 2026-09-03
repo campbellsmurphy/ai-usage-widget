@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>ai-usage-collector</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<!-- Homebrew python first: chatgpt.com's Cloudflare 403s Apple python's LibreSSL
+		     TLS fingerprint (and system curl's), so the Codex fetch needs an OpenSSL
+		     build. Later entries keep the rest of the collector alive if brew python
+		     ever disappears: only the Codex row freezes, and the widget says so. -->
+		<string>for p in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do [ -x "$p" ] &amp;&amp; exec "$p" __HOME__/.ai-usage-collector/collector.py; done</string>
+	</array>
+	<key>StartInterval</key>
+	<integer>1200</integer>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>__HOME__/.ai-usage-collector/push.log</string>
+	<key>StandardErrorPath</key>
+	<string>__HOME__/.ai-usage-collector/push.err</string>
+</dict>
+</plist>

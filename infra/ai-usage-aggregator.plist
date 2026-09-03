@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>ai-usage-aggregator</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>__HOME__/.ai-usage-aggregator/ai_usage_aggregator.py</string>
+	</array>
+	<key>KeepAlive</key>
+	<true/>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>__HOME__/.ai-usage-aggregator/server.log</string>
+	<key>StandardErrorPath</key>
+	<string>__HOME__/.ai-usage-aggregator/server.err</string>
+</dict>
+</plist>

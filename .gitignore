@@ -1,0 +1,15 @@
+# Local build output
+.build/
+DerivedData/
+*.xcuserdatad
+xcuserdata/
+
+# Secrets and per-install identity: never commit. See Shared/Secrets.example.swift
+Shared/Secrets.swift
+.team-id
+infra/*.local.*
+
+.DS_Store
+
+# Python build artifacts
+__pycache__/
