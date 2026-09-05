@@ -514,6 +514,12 @@ struct TokenHistoryView: View {
                     }
                 }
 
+                if let unpriced = c.unpriced, !unpriced.isEmpty {
+                    Text("Unpriced: " + unpriced.joined(separator: ", "))
+                        .font(.caption2)
+                        .foregroundStyle(UsageStyle.color(for: 75))
+                }
+
                 if let basis = c.basis {
                     Text(basis)
                         .font(.caption2)

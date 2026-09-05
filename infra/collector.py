@@ -17,7 +17,7 @@ Config lives in ~/.ai-usage-collector/config.json:
 Leave a provider out of the list and its key is never pushed, so the phone shows no
 row for it rather than an error.
 """
-import json, os, re, ssl, subprocess, time, urllib.request, urllib.error
+import json, os, re, ssl, subprocess, sys, time, urllib.request, urllib.error
 
 STATE_DIR = os.path.expanduser("~/.ai-usage-collector")
 os.makedirs(STATE_DIR, exist_ok=True)
@@ -206,10 +206,11 @@ def fetch_codex():
 # the default Claude Code uses); cache read is 0.1x input.
 PRICING = {
     "claude-fable-5":    (10.0, 50.0),
+    "claude-opus-5":     (5.0, 25.0),
     "claude-opus-4-8":   (5.0, 25.0),
     "claude-opus-4-7":   (5.0, 25.0),
     "claude-opus-4-6":   (5.0, 25.0),
-    "claude-sonnet-5":   (3.0, 15.0),
+    "claude-sonnet-5":   (2.0, 10.0),
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-haiku-4-5":  (1.0, 5.0),
 }
@@ -258,6 +259,10 @@ def price(bymodel):
         base = PRICING.get(model) or PRICING.get(model.rsplit("-", 1)[0])
         if not base:
             unpriced.append(model)
+            print("WARNING: Unpriced model %s (%d tokens)" % (model, sum(
+                c.get(k, 0) for k in ("input_tokens", "output_tokens",
+                                     "cache_creation_input_tokens", "cache_read_input_tokens"))),
+                  file=sys.stderr)
             continue
         inp, outp = base
         parts = {
