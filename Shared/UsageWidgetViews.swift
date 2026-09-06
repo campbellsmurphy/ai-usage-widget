@@ -43,7 +43,7 @@ struct UsageWidgetView: View {
             }
             if hasAntigravity {
                 Spacer(minLength: 4)
-                header("ANTIGRAVITY wk", color: UsageStyle.gemini)
+                header("AGY wk", color: UsageStyle.gemini)
                 Spacer(minLength: 2)
                 metric("Claude+GPT", ag?.thirdParty?.weeklyUsed)
                 metric("Gemini", ag?.gemini?.weeklyUsed)
@@ -95,7 +95,7 @@ struct UsageWidgetView: View {
                     Spacer(minLength: 7)
                 }
                 if hasAntigravity {
-                    header("ANTIGRAVITY", color: UsageStyle.gemini)
+                    header("AGY", color: UsageStyle.gemini)
                     Spacer(minLength: 3)
                     let cgWeekly = ag?.thirdParty?.weeklyUsed
                     metric("C+GPT wk", cgWeekly)

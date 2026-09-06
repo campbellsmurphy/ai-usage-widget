@@ -187,7 +187,7 @@ struct ContentView: View {
 
     @ViewBuilder private var antigravitySection: some View {
         let ag = store.payload?.antigravity
-        section("Antigravity", accent: UsageStyle.gemini) {
+        section("AGY", accent: UsageStyle.gemini) {
             Text("Percentages here are USED. Antigravity's own Models screen shows the "
                  + "inverse (what is left), so 0% used there reads as 100%.")
                 .font(.caption2)
@@ -248,9 +248,8 @@ struct ContentView: View {
         .padding(.bottom, 6)
     }
 
-    /// One link per source that keeps a token log on disk. Antigravity is the one that
-    /// cannot: it stores protobuf trajectories with no token counts, and its local RPCs
-    /// (quota summary, user status) return fractions and credits only.
+    /// One link per source that keeps a token log on disk. All four do: agy stores its
+    /// per-call usage inside protobuf step metadata, which the collector decodes.
     @ViewBuilder private var historyLink: some View {
         if let t = store.payload?.tokens, t.ok == true {
             historyRow(t, title: "Claude Code token history", unit: "messages",
@@ -267,6 +266,14 @@ struct ContentView: View {
                        caveat: "Grok CLI sessions on the collector machine only, read from its "
                              + "session update logs. Not grok.com chat. Cost is the figure the Grok "
                              + "CLI records itself per turn.")
+        }
+        if let t = store.payload?.agyTokens, t.ok == true {
+            historyRow(t, title: "AGY token history", unit: "calls",
+                       caveat: "agy (Antigravity CLI) and Antigravity IDE conversations on the "
+                             + "collector machine, decoded from their step metadata. Model names "
+                             + "come from a code table mapped by test runs; unmapped codes are "
+                             + "listed by number and left unpriced. Cost uses Gemini API and "
+                             + "Anthropic list prices.")
         }
     }
 

@@ -10,6 +10,8 @@ Sources that only the collector machine can reach:
     OpenAI's published list rates.
   * grok_tokens - Grok CLI token history from its session update logs, with the cost the
     CLI itself records per turn.
+  * agy_tokens - agy (Antigravity CLI) and Antigravity IDE token history, decoded from
+    the protobuf step metadata in their conversation SQLite files.
 
 Only computed percentages are pushed. No credentials leave this machine.
 Read-only with respect to Claude's credential file: if the access token has expired we
@@ -32,7 +34,7 @@ except Exception:
 AGG = CFG.get("aggregator", "http://100.x.x.x:8756").rstrip("/") + "/push"
 TOKEN = CFG.get("token", "REPLACE_ME")
 PROVIDERS = CFG.get("providers", ["claude", "antigravity", "codex", "tokens", "codex_tokens",
-                                  "grok_tokens"])
+                                  "grok_tokens", "agy_tokens"])
 CURRENCY = CFG.get("currency", "USD")
 CREDS = os.path.expanduser("~/.claude/.credentials.json")
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
@@ -219,6 +221,14 @@ PRICING = {
     "gpt-5.6-terra":     (2.0, 12.0),
     "gpt-5.6-luna":      (0.2, 1.2),
     "gpt-5.5":           (6.25, 37.5),
+    # Gemini API paid tier, verified 2026-09-06 at ai.google.dev/gemini-api/docs/pricing.
+    # 3.6/3.7/3.8 Flash share an introductory rate that doubles on 2027-01-01; cached
+    # input is 0.1x here too. Gemini bills no cache-write premium (storage per hour
+    # instead), and agy records no cache-write field, so that term is always zero.
+    "gemini-3.8-flash":  (0.75, 3.75),
+    "gemini-3.7-flash":  (0.75, 3.75),
+    "gemini-3.6-flash":  (0.75, 3.75),
+    "gemini-3.1-pro":    (2.0, 12.0),
     "claude-fable-5":    (10.0, 50.0),
     "claude-opus-4-8":   (5.0, 25.0),
     "claude-opus-4-7":   (5.0, 25.0),
@@ -630,10 +640,174 @@ def fetch_grok_tokens():
     return data
 
 
+AGY_CONVERSATION_DIRS = [os.path.expanduser("~/.gemini/antigravity-cli/conversations"),
+                         os.path.expanduser("~/.gemini/antigravity/conversations")]
+AGY_TOKEN_INDEX = os.path.join(STATE_DIR, "agy-tokens-index.json")
+AGY_TOKEN_CACHE = os.path.join(STATE_DIR, "agy-tokens.json")
+# Model code -> id, established 2026-09-06 by running one-word prompts with a known
+# --model and reading the code back. Anything else is reported by number, unpriced.
+AGY_MODELS = {1318: "gemini-3.8-flash-high", 1298: "gemini-3.7-flash-high",
+              1299: "gemini-3.7-flash-medium", 1300: "gemini-3.7-flash-low",
+              1072: "gemini-3.6-flash-medium", 1035: "claude-sonnet-4-6",
+              1026: "claude-opus-4-6-thinking"}
+
+
+def _pb_top(b):
+    """(field, wire_type, value) for one protobuf message; stops at the first oddity."""
+    out, i = [], 0
+    while i < len(b):
+        try:
+            key, i = _varint(b, i)
+        except Exception:
+            break
+        fn, wt = key >> 3, key & 7
+        if wt == 0:
+            v, i = _varint(b, i); out.append((fn, 0, v))
+        elif wt == 1:
+            i += 8
+        elif wt == 5:
+            i += 4
+        elif wt == 2:
+            ln, i = _varint(b, i); out.append((fn, 2, b[i:i + ln])); i += ln
+        else:
+            break
+    return out
+
+
+def _varint(buf, i):
+    val = shift = 0
+    while i < len(buf):
+        b = buf[i]; i += 1
+        val |= (b & 0x7F) << shift
+        if not b & 0x80:
+            return val, i
+        shift += 7
+    raise ValueError("truncated varint")
+
+
+def _agy_conversation_totals(path):
+    """Per-day and per-model token totals for one conversation SQLite file.
+
+    Each step's `metadata` blob carries, at field 9, a usage message: 1 = model code,
+    2 = uncached input, 3 = output, 5 = cached input, 9 = thinking, 10 = text, with
+    3 == 9 + 10 on every record checked. Field 1 of the same blob holds a Timestamp
+    (sub-field 1 = epoch seconds) used for the day bucket."""
+    import sqlite3, datetime
+    byday, bymodel, calls = {}, {}, 0
+    db = sqlite3.connect("file:%s?mode=ro" % path, uri=True)
+    try:
+        rows = db.execute("select metadata from steps").fetchall()
+    finally:
+        db.close()
+    for (blob,) in rows:
+        if not blob:
+            continue
+        top = _pb_top(bytes(blob))
+        usage = next((v for fn, wt, v in top if fn == 9 and wt == 2), None)
+        if usage is None:
+            continue
+        u = {k: v for k, w, v in _pb_top(usage) if w == 0}
+        if 2 not in u or 3 not in u:
+            continue
+        ts = next((v for fn, wt, v in top if fn == 1 and wt == 2), None)
+        epoch = next((v for k, w, v in _pb_top(ts) if k == 1 and w == 0), 0) if ts else 0
+        day = datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).date().isoformat() if epoch else ""
+        model = AGY_MODELS.get(u.get(1), "agy-model-%s" % u.get(1))
+        inp, out, cached = u.get(2, 0), u.get(3, 0), u.get(5, 0)
+        calls += 1
+        d = byday.setdefault(day, {"billed": 0, "msgs": 0})
+        d["billed"] += inp + out; d["msgs"] += 1
+        m = bymodel.setdefault(model, {"input_tokens": 0, "output_tokens": 0,
+                                      "cache_read_input_tokens": 0,
+                                      "cache_creation_input_tokens": 0, "calls": 0})
+        m["input_tokens"] += inp; m["output_tokens"] += out
+        m["cache_read_input_tokens"] += cached; m["calls"] += 1
+    return {"byday": byday, "bymodel": bymodel, "calls": calls}
+
+
+def fetch_agy_tokens():
+    """Lifetime + daily agy / Antigravity token usage. Per-file index like Codex."""
+    try:
+        cached = json.load(open(AGY_TOKEN_CACHE))
+        if time.time() - cached.get("at", 0) < TOKEN_TTL:
+            return cached["data"]
+    except Exception:
+        pass
+    try:
+        index = json.load(open(AGY_TOKEN_INDEX))
+    except Exception:
+        index = {}
+    import collections
+    live = {}
+    for d in AGY_CONVERSATION_DIRS:
+        for fn in (os.listdir(d) if os.path.isdir(d) else []):
+            if not fn.endswith(".db"):
+                continue
+            p = os.path.join(d, fn)
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            key = "%d:%d" % (st.st_size, int(st.st_mtime))
+            ent = index.get(p)
+            if not ent or ent.get("key") != key:
+                try:
+                    ent = {"key": key, **_agy_conversation_totals(p)}
+                except Exception:
+                    continue
+            live[p] = ent
+    index = live
+    try:
+        json.dump(index, open(AGY_TOKEN_INDEX, "w"))
+    except Exception:
+        pass
+
+    tot = collections.Counter()
+    byday = collections.defaultdict(collections.Counter)
+    models = collections.Counter()
+    bymodel = collections.defaultdict(collections.Counter)
+    calls = convs = 0
+    for ent in index.values():
+        if not ent.get("calls"):
+            continue
+        convs += 1; calls += ent["calls"]
+        for day, v in ent["byday"].items():
+            if day:
+                byday[day]["billed"] += v["billed"]; byday[day]["msgs"] += v["msgs"]
+        for m, v in ent["bymodel"].items():
+            models[m] += v["calls"]
+            for k in ("input_tokens", "output_tokens", "cache_read_input_tokens",
+                      "cache_creation_input_tokens"):
+                bymodel[m][k] += v[k]; tot[k] += v[k]
+    if not calls:
+        return {"error": "no_sessions"}
+    days = sorted(byday)[-TOKEN_DAYS:]
+    data = {
+        "ok": True,
+        "messages": calls,
+        "api_messages": convs,
+        # agy already reports uncached and cached input separately, so billed is in + out.
+        "billed": tot["input_tokens"] + tot["output_tokens"],
+        "cache_read": tot["cache_read_input_tokens"],
+        "input": tot["input_tokens"] + tot["cache_read_input_tokens"],
+        "output": tot["output_tokens"],
+        "cache_creation": 0,
+        "models": dict(models.most_common(8)),
+        "cost": price(bymodel),
+        "days": [{"d": d, "billed": byday[d]["billed"], "msgs": byday[d]["msgs"]} for d in days],
+    }
+    try:
+        json.dump({"at": int(time.time()), "data": data}, open(AGY_TOKEN_CACHE, "w"))
+    except Exception:
+        pass
+    return data
+
+
 def main():
     fetchers = {"claude": fetch_claude, "antigravity": fetch_antigravity,
                 "codex": fetch_codex, "tokens": fetch_tokens,
-                "codex_tokens": fetch_codex_tokens, "grok_tokens": fetch_grok_tokens}
+                "codex_tokens": fetch_codex_tokens, "grok_tokens": fetch_grok_tokens,
+                "agy_tokens": fetch_agy_tokens}
     payload = {name: fetchers[name]() for name in PROVIDERS if name in fetchers}
     payload["at"] = int(time.time())
     body = json.dumps(payload).encode()

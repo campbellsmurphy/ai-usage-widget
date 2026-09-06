@@ -24,6 +24,7 @@ struct UsagePayload: Decodable {
     var tokens: TokenUsage?
     var codexTokens: TokenUsage?
     var grokTokens: TokenUsage?
+    var agyTokens: TokenUsage?
     var updated: TimeInterval?
     var stale: Bool?
     var claudeError: String?
@@ -40,6 +41,7 @@ struct UsagePayload: Decodable {
         case claude, grok, gemini, codex, antigravity, tokens, updated, stale
         case codexTokens = "codex_tokens"
         case grokTokens = "grok_tokens"
+        case agyTokens = "agy_tokens"
         case claudeError = "claude_error"
         case claudeSource = "claude_source"
         case antigravityStale = "antigravity_stale"
@@ -66,7 +68,7 @@ struct UsagePayload: Decodable {
         }
         if antigravity?.ok == true {
             for g in antigravity?.groups ?? [] {
-                let n = g.name ?? "Antigravity"
+                let n = g.name ?? "AGY"
                 check("\(n) weekly", g.weeklyUsed)
                 check("\(n) 5-hour", g.fiveHourUsed)
             }
