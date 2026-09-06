@@ -251,6 +251,27 @@ struct ContentView: View {
     /// One link per source that keeps a token log on disk. All four do: agy stores its
     /// per-call usage inside protobuf step metadata, which the collector decodes.
     @ViewBuilder private var historyLink: some View {
+        if let ct = store.payload?.costTotal, let total = ct.total {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("All sources, if billed at API rates")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(UsageStyle.label)
+                    Text(ct.parts?.keys.contains("grok_tokens") == true
+                         ? "Grok's share is the CLI's own accounting; the rest is counterfactual."
+                         : "Counterfactual: flat-rate plans paid none of this.")
+                        .font(.caption2)
+                        .foregroundStyle(UsageStyle.faint)
+                }
+                Spacer(minLength: 8)
+                Text(UsageStyle.money(total, currency: ct.currency ?? "AUD"))
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(UsageStyle.claude)
+                    .monospacedDigit()
+            }
+            .padding(14)
+            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+        }
         if let t = store.payload?.tokens, t.ok == true {
             historyRow(t, title: "Claude Code token history", unit: "messages",
                        caveat: "Claude Code sessions on the collector machine only: not claude.ai.")
@@ -415,6 +436,7 @@ struct TokenHistoryView: View {
                 chart
                 costSection
                 models
+                activity
                 caveatView
             }
             .padding(20)
@@ -592,6 +614,37 @@ struct TokenHistoryView: View {
                         }
                         ProgressView(value: Double(count) / Double(total))
                             .tint(UsageStyle.claude)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Billed tokens by the directory each session ran from. The label is a proxy for
+    /// what the work was about: fleet runs and project folders separate cleanly, but
+    /// every interactive session started from the home directory shares one bucket.
+    @ViewBuilder private var activity: some View {
+        if let rows = tokens.byProject, !rows.isEmpty {
+            let total = max(rows.reduce(0) { $0 + $1.billed }, 1)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("BY ACTIVITY (WORKING DIRECTORY)")
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(UsageStyle.gemini)
+                ForEach(rows) { r in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Text(r.name)
+                                .font(.subheadline)
+                                .foregroundStyle(UsageStyle.label)
+                                .lineLimit(1)
+                            Spacer()
+                            Text(UsageStyle.compact(r.billed))
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(UsageStyle.claude)
+                                .monospacedDigit()
+                        }
+                        ProgressView(value: Double(r.billed) / Double(total))
+                            .tint(UsageStyle.gemini)
                     }
                 }
             }

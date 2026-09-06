@@ -25,7 +25,14 @@ struct UsagePayload: Decodable {
     var codexTokens: TokenUsage?
     var grokTokens: TokenUsage?
     var agyTokens: TokenUsage?
+    var costTotal: CostTotal?
     var updated: TimeInterval?
+
+    struct CostTotal: Decodable {
+        var currency: String?
+        var total: Double?
+        var parts: [String: Double]?
+    }
     var stale: Bool?
     var claudeError: String?
     var claudeSource: String?
@@ -42,6 +49,7 @@ struct UsagePayload: Decodable {
         case codexTokens = "codex_tokens"
         case grokTokens = "grok_tokens"
         case agyTokens = "agy_tokens"
+        case costTotal = "cost_total"
         case claudeError = "claude_error"
         case claudeSource = "claude_source"
         case antigravityStale = "antigravity_stale"
@@ -248,7 +256,17 @@ struct TokenUsage: Decodable {
     var models: [String: Int]?
     var days: [Day]?
     var cost: Cost?
+    var byProject: [ProjectRow]?
     var error: String?
+
+    /// Billed tokens by the working directory the session ran from. A proxy for
+    /// activity: fleet and project work separate cleanly, interactive sessions started
+    /// from the home directory do not.
+    struct ProjectRow: Decodable, Identifiable {
+        var name: String
+        var billed: Int
+        var id: String { name }
+    }
 
     /// What this usage would have cost at list API rates. On a flat-rate plan this is
     /// a counterfactual, not a bill.
@@ -282,6 +300,7 @@ struct TokenUsage: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case ok, messages, billed, input, output, models, days, cost, error
+        case byProject = "by_project"
         case apiMessages = "api_messages"
         case cacheRead = "cache_read"
         case cacheCreation = "cache_creation"

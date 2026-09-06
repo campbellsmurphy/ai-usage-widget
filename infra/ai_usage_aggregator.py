@@ -455,6 +455,19 @@ def get_usage(force=False):
         if _pushed.get("agy_tokens"):
             out["agy_tokens"] = _pushed["agy_tokens"]
 
+        # One figure across every source that carries a priced history. Mixed bases
+        # (list-price counterfactuals for three, the Grok CLI's own accounting for one)
+        # are named in `parts` so the app can say so.
+        parts, cur = {}, None
+        for key in ("tokens", "codex_tokens", "grok_tokens", "agy_tokens"):
+            c = (out.get(key) or {}).get("cost") or {}
+            if c.get("total") is not None and (cur is None or c.get("currency") == cur):
+                cur = c.get("currency")
+                parts[key] = c["total"]
+        if parts:
+            out["cost_total"] = {"currency": cur, "total": round(sum(parts.values()), 2),
+                                 "parts": parts}
+
         if _pushed["codex"]:
             out["codex"] = _pushed["codex"]
             if not push_fresh:

@@ -354,8 +354,11 @@ def fetch_tokens():
     msgs_raw = 0        # every logged assistant entry, matching Claude Code's own counter
     keys = ("input_tokens", "output_tokens",
             "cache_creation_input_tokens", "cache_read_input_tokens")
+    byproj = collections.Counter()
 
     for root, _dirs, files in os.walk(PROJECTS):
+        rel = os.path.relpath(root, PROJECTS).split(os.sep)[0]
+        label = _activity(_claude_project_path(rel)) if rel != "." else "unknown"
         for fn in files:
             if not fn.endswith(".jsonl"):
                 continue
@@ -388,6 +391,8 @@ def fetch_tokens():
                             byday[day][k] += v
                     if day:
                         byday[day]["messages"] += 1
+                    byproj[label] += ((u.get("input_tokens", 0) or 0) + (u.get("output_tokens", 0) or 0)
+                                      + (u.get("cache_creation_input_tokens", 0) or 0))
                     if m.get("model"):
                         models[m["model"]] += 1
                         for k in keys:
@@ -412,6 +417,7 @@ def fetch_tokens():
         "cache_creation": tot["cache_creation_input_tokens"],
         "models": dict(models.most_common(8)),
         "cost": price(bymodel),
+        "by_project": _top_projects(byproj),
         "days": [{"d": d,
                   "billed": (byday[d]["input_tokens"] + byday[d]["output_tokens"]
                              + byday[d]["cache_creation_input_tokens"]),
@@ -436,9 +442,12 @@ def _codex_session_totals(path):
     an `info` block is the session's final figure. The model comes from the last
     turn_context seen, which is what the CLI was actually configured with."""
     day = os.path.basename(path)[8:18]     # rollout-YYYY-MM-DD...
-    model, usage, turns = None, None, 0
+    model, usage, turns, cwd = None, None, 0, None
     with open(path, "r", errors="replace") as fh:
         for line in fh:
+            if cwd is None and '"session_meta"' in line:
+                m = re.search(r'"cwd":"([^"]+)"', line)
+                cwd = m.group(1) if m else ""
             if '"turn_context"' in line:
                 m = re.search(r'"model":"([^"]+)"', line)
                 if m:
@@ -451,7 +460,7 @@ def _codex_session_totals(path):
                 if info and info.get("total_token_usage"):
                     usage = info["total_token_usage"]
                     turns += 1
-    return day, model, usage, turns
+    return day, model, usage, turns, cwd
 
 
 def fetch_codex_tokens():
@@ -482,14 +491,15 @@ def fetch_codex_tokens():
                 st = os.stat(p)
             except OSError:
                 continue
-            key = "%d:%d" % (st.st_size, int(st.st_mtime))
+            key = "v2:%d:%d" % (st.st_size, int(st.st_mtime))
             ent = index.get(p)
             if not ent or ent.get("key") != key:
                 try:
-                    day, model, usage, turns = _codex_session_totals(p)
+                    day, model, usage, turns, cwd = _codex_session_totals(p)
                 except Exception:
                     continue
-                ent = {"key": key, "day": day, "model": model, "usage": usage, "turns": turns}
+                ent = {"key": key, "day": day, "model": model, "usage": usage, "turns": turns,
+                       "cwd": cwd}
             live[p] = ent
     index = live
     try:
@@ -501,6 +511,7 @@ def fetch_codex_tokens():
     byday = collections.defaultdict(collections.Counter)
     models = collections.Counter()
     bymodel = collections.defaultdict(collections.Counter)
+    byproj = collections.Counter()
     sessions = turns = 0
     for ent in index.values():
         u = ent.get("usage")
@@ -513,6 +524,7 @@ def fetch_codex_tokens():
         cache_w = u.get("cache_write_input_tokens", 0) or 0
         tot["input"] += inp; tot["output"] += out; tot["cache_read"] += cached_in
         tot["cache_write"] += cache_w
+        byproj[_activity(ent.get("cwd"))] += inp - cached_in + out
         day = ent.get("day") or ""
         if day:
             byday[day]["billed"] += inp - cached_in + out
@@ -542,6 +554,7 @@ def fetch_codex_tokens():
         "cache_creation": tot["cache_write"],
         "models": dict(models.most_common(8)),
         "cost": price(bymodel),
+        "by_project": _top_projects(byproj),
         "days": [{"d": d, "billed": byday[d]["billed"], "msgs": byday[d]["msgs"]} for d in days],
     }
     try:
@@ -575,7 +588,10 @@ def fetch_grok_tokens():
     bymodel = collections.defaultdict(collections.Counter)
     turns = calls = 0
     sessions = set()
+    byproj = collections.Counter()
+    import urllib.parse
     for f in glob.glob(os.path.join(GROK_SESSIONS, "*", "*", "updates.jsonl")):
+        label = _activity(urllib.parse.unquote(os.path.basename(os.path.dirname(os.path.dirname(f)))))
         try:
             for line in open(f, errors="replace"):
                 if '"turn_completed"' not in line or '"usage"' not in line:
@@ -598,6 +614,7 @@ def fetch_grok_tokens():
                     d.get("timestamp", 0), datetime.timezone.utc).date().isoformat()
                 byday[day]["billed"] += inp - cached_in + out
                 byday[day]["msgs"] += 1
+                byproj[label] += inp - cached_in + out
                 for m, mu in (u.get("modelUsage") or {}).items():
                     models[m] += mu.get("modelCalls", 0) or 1
                     bymodel[m]["ticks"] += mu.get("costUsdTicks", 0) or 0
@@ -631,6 +648,7 @@ def fetch_grok_tokens():
         "cache_creation": tot["cache_write"],
         "models": dict(models.most_common(8)),
         "cost": cost,
+        "by_project": _top_projects(byproj),
         "days": [{"d": d, "billed": byday[d]["billed"], "msgs": byday[d]["msgs"]} for d in days],
     }
     try:
@@ -646,10 +664,63 @@ AGY_TOKEN_INDEX = os.path.join(STATE_DIR, "agy-tokens-index.json")
 AGY_TOKEN_CACHE = os.path.join(STATE_DIR, "agy-tokens.json")
 # Model code -> id, established 2026-09-06 by running one-word prompts with a known
 # --model and reading the code back. Anything else is reported by number, unpriced.
-AGY_MODELS = {1318: "gemini-3.8-flash-high", 1298: "gemini-3.7-flash-high",
-              1299: "gemini-3.7-flash-medium", 1300: "gemini-3.7-flash-low",
-              1072: "gemini-3.6-flash-medium", 1035: "claude-sonnet-4-6",
-              1026: "claude-opus-4-6-thinking"}
+AGY_MODELS = {1318: "gemini-3.8-flash-high", 1319: "gemini-3.8-flash-medium",
+              1320: "gemini-3.8-flash-low",
+              1298: "gemini-3.7-flash-high", 1299: "gemini-3.7-flash-medium",
+              1300: "gemini-3.7-flash-low",
+              1071: "gemini-3.6-flash-high", 1072: "gemini-3.6-flash-medium",
+              1073: "gemini-3.6-flash-low",
+              1016: "gemini-3.1-pro-high", 1036: "gemini-3.1-pro-low",
+              1035: "claude-sonnet-4-6", 1026: "claude-opus-4-6-thinking",
+              342: "gpt-oss-120b-medium",
+              # One IDE call on 2026-06-27 on a Gemini-family model (family code 24)
+              # that the CLI no longer offers, so it cannot be test-mapped.
+              1050: "gemini-retired-code-1050"}
+
+
+def _activity(path):
+    """Working directory -> a short activity label for the by-activity breakdown.
+    A proxy, not a truth: interactive sessions started from the home directory all
+    land in one bucket, while fleet and project work separates cleanly."""
+    if not path:
+        return "unknown"
+    home = os.path.expanduser("~")
+    p = path.rstrip("/")
+    if p == home:
+        return "home (interactive)"
+    vault = "/Documents/karpathy-vault"
+    if vault in p:
+        rest = p.split(vault, 1)[1].strip("/")
+        return "vault" if not rest else "vault: " + rest.split("/")[-1]
+    if p.startswith(home + "/code/"):
+        return "code: " + p[len(home) + 6:].split("/")[0]
+    if p.startswith("/private/tmp") or p.startswith("/tmp"):
+        parts = p.split("/")
+        return "scratch: " + parts[3] if len(parts) > 3 else "scratch"
+    if p.startswith(home + "/"):
+        return "home: " + p[len(home) + 1:].split("/")[0]
+    return p.split("/")[-1] or p
+
+
+def _claude_project_path(dirname):
+    """~/.claude/projects encodes the cwd by replacing every '/' with '-', which is
+    ambiguous for names containing hyphens. Resolve the vault and home prefixes,
+    which is enough for the activity label."""
+    home = os.path.expanduser("~")
+    enc_home = home.replace("/", "-")
+    # '~' and ' ' are encoded as '-' as well, so the vault prefix has none of them.
+    for enc_vault in (enc_home + "-Library-Mobile-Documents-iCloud-md-obsidian-Documents-karpathy-vault",
+                      enc_home + "-Library-Mobile-Documents-com-apple-CloudDocs-Documents-karpathy-vault"):
+        if dirname.startswith(enc_vault):
+            return home + "/Documents/karpathy-vault" + dirname[len(enc_vault):].replace("-", "/", 1)
+    if dirname.startswith(enc_home):
+        return home + dirname[len(enc_home):].replace("-", "/", 1)
+    return dirname.replace("-", "/")
+
+
+def _top_projects(counter, n=8):
+    rows = sorted(counter.items(), key=lambda kv: -kv[1])
+    return [{"name": k, "billed": v} for k, v in rows[:n]]
 
 
 def _pb_top(b):
@@ -748,7 +819,9 @@ def fetch_agy_tokens():
                 st = os.stat(p)
             except OSError:
                 continue
-            key = "%d:%d" % (st.st_size, int(st.st_mtime))
+            # The version tag forces a rescan when AGY_MODELS gains a mapping, since
+            # model names are resolved at scan time.
+            key = "v2:%d:%d" % (st.st_size, int(st.st_mtime))
             ent = index.get(p)
             if not ent or ent.get("key") != key:
                 try:
