@@ -6,6 +6,8 @@ Sources that only the collector machine can reach:
   * Antigravity - its quota RPC is served by a local language_server on loopback.
   * Codex    - the ChatGPT plan quota, read with the Codex CLI's stored access token.
   * tokens   - Claude Code token history from the local session logs, with a costing.
+  * codex_tokens - Codex CLI token history from its local session rollouts (no costing:
+    Codex plan models have no published per-token list price to convert against).
 
 Only computed percentages are pushed. No credentials leave this machine.
 Read-only with respect to Claude's credential file: if the access token has expired we
@@ -27,7 +29,7 @@ except Exception:
     CFG = {}
 AGG = CFG.get("aggregator", "http://100.x.x.x:8756").rstrip("/") + "/push"
 TOKEN = CFG.get("token", "REPLACE_ME")
-PROVIDERS = CFG.get("providers", ["claude", "antigravity", "codex", "tokens"])
+PROVIDERS = CFG.get("providers", ["claude", "antigravity", "codex", "tokens", "codex_tokens"])
 CURRENCY = CFG.get("currency", "USD")
 CREDS = os.path.expanduser("~/.claude/.credentials.json")
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
@@ -400,9 +402,126 @@ def fetch_tokens():
     return data
 
 
+CODEX_SESSIONS = os.path.expanduser("~/.codex/sessions")
+CODEX_TOKEN_INDEX = os.path.join(STATE_DIR, "codex-tokens-index.json")
+CODEX_TOKEN_CACHE = os.path.join(STATE_DIR, "codex-tokens.json")
+
+
+def _codex_session_totals(path):
+    """(day, model, cumulative usage dict, turns) for one rollout file.
+
+    Every token_count event carries the session's running total, so the last one with
+    an `info` block is the session's final figure. The model comes from the last
+    turn_context seen, which is what the CLI was actually configured with."""
+    day = os.path.basename(path)[8:18]     # rollout-YYYY-MM-DD...
+    model, usage, turns = None, None, 0
+    with open(path, "r", errors="replace") as fh:
+        for line in fh:
+            if '"turn_context"' in line:
+                m = re.search(r'"model":"([^"]+)"', line)
+                if m:
+                    model = m.group(1)
+            elif '"total_token_usage"' in line:
+                try:
+                    info = json.loads(line)["payload"]["info"]
+                except Exception:
+                    continue
+                if info and info.get("total_token_usage"):
+                    usage = info["total_token_usage"]
+                    turns += 1
+    return day, model, usage, turns
+
+
+def fetch_codex_tokens():
+    """Lifetime + daily Codex CLI token usage from ~/.codex/sessions.
+
+    The corpus is several GB, so unlike the Claude scan this keeps a per-file index
+    (size + mtime) and only re-reads files that changed. Same output shape as
+    `tokens`, minus cost."""
+    try:
+        cached = json.load(open(CODEX_TOKEN_CACHE))
+        if time.time() - cached.get("at", 0) < TOKEN_TTL:
+            return cached["data"]
+    except Exception:
+        pass
+    try:
+        index = json.load(open(CODEX_TOKEN_INDEX))
+    except Exception:
+        index = {}
+
+    import collections
+    live = {}
+    for root, _dirs, files in os.walk(CODEX_SESSIONS):
+        for fn in files:
+            if not fn.endswith(".jsonl"):
+                continue
+            p = os.path.join(root, fn)
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            key = "%d:%d" % (st.st_size, int(st.st_mtime))
+            ent = index.get(p)
+            if not ent or ent.get("key") != key:
+                try:
+                    day, model, usage, turns = _codex_session_totals(p)
+                except Exception:
+                    continue
+                ent = {"key": key, "day": day, "model": model, "usage": usage, "turns": turns}
+            live[p] = ent
+    index = live
+    try:
+        json.dump(index, open(CODEX_TOKEN_INDEX, "w"))
+    except Exception:
+        pass
+
+    tot = collections.Counter()
+    byday = collections.defaultdict(collections.Counter)
+    models = collections.Counter()
+    sessions = turns = 0
+    for ent in index.values():
+        u = ent.get("usage")
+        if not u:
+            continue
+        sessions += 1
+        turns += ent.get("turns", 0)
+        inp, out = u.get("input_tokens", 0) or 0, u.get("output_tokens", 0) or 0
+        cached_in = u.get("cached_input_tokens", 0) or 0
+        tot["input"] += inp; tot["output"] += out; tot["cache_read"] += cached_in
+        day = ent.get("day") or ""
+        if day:
+            byday[day]["billed"] += inp - cached_in + out
+            byday[day]["msgs"] += ent.get("turns", 0)
+        if ent.get("model"):
+            models[ent["model"]] += ent.get("turns", 0) or 1
+    if not sessions:
+        return {"error": "no_sessions"}
+    days = sorted(byday)[-TOKEN_DAYS:]
+    data = {
+        "ok": True,
+        "messages": turns,
+        "api_messages": sessions,
+        # OpenAI counts cached input inside input_tokens. "billed" follows the Claude
+        # convention used elsewhere in this app: cache reads excluded.
+        "billed": tot["input"] - tot["cache_read"] + tot["output"],
+        "cache_read": tot["cache_read"],
+        "input": tot["input"],
+        "output": tot["output"],
+        "cache_creation": 0,
+        "models": dict(models.most_common(8)),
+        "days": [{"d": d, "billed": byday[d]["billed"], "msgs": byday[d]["msgs"]} for d in days],
+    }
+    try:
+        json.dump({"at": int(time.time()), "data": data}, open(CODEX_TOKEN_CACHE, "w"))
+    except Exception:
+        pass
+    return data
+
+
 def main():
     fetchers = {"claude": fetch_claude, "antigravity": fetch_antigravity,
-                "codex": fetch_codex, "tokens": fetch_tokens}
+                "codex": fetch_codex, "tokens": fetch_tokens,
+                "codex_tokens": fetch_codex_tokens}
     payload = {name: fetchers[name]() for name in PROVIDERS if name in fetchers}
     payload["at"] = int(time.time())
     body = json.dumps(payload).encode()

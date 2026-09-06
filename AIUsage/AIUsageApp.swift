@@ -248,43 +248,60 @@ struct ContentView: View {
         .padding(.bottom, 6)
     }
 
+    /// One link per source that reports token counts. Grok and Antigravity never will:
+    /// neither keeps a per-message log on disk, and their APIs expose percentages only.
     @ViewBuilder private var historyLink: some View {
         if let t = store.payload?.tokens, t.ok == true {
-            NavigationLink {
-                TokenHistoryView(tokens: t)
-            } label: {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Token history")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(UsageStyle.label)
-                        Text("\(UsageStyle.compact(t.billed)) tokens · \(UsageStyle.grouped(t.messages)) messages")
-                            .font(.caption2)
-                            .foregroundStyle(UsageStyle.faint)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right").foregroundStyle(UsageStyle.faint)
-                }
-                .padding(14)
-                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
-            }
+            historyRow(t, title: "Claude Code token history", unit: "messages",
+                       caveat: "Claude Code sessions on the collector machine only: not claude.ai.")
+        }
+        if let t = store.payload?.codexTokens, t.ok == true {
+            historyRow(t, title: "Codex token history", unit: "turns",
+                       caveat: "Codex CLI sessions on the collector machine only, read from its "
+                             + "session rollouts. Not the ChatGPT app. No cost figure: plan models "
+                             + "have no published per-token list price.")
         }
     }
 
+    private func historyRow(_ t: TokenUsage, title: String, unit: String, caveat: String) -> some View {
+        NavigationLink {
+            TokenHistoryView(tokens: t, title: title, unit: unit, caveat: caveat)
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(UsageStyle.label)
+                    Text("\(UsageStyle.compact(t.billed)) tokens · \(UsageStyle.grouped(t.messages)) \(unit)")
+                        .font(.caption2)
+                        .foregroundStyle(UsageStyle.faint)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").foregroundStyle(UsageStyle.faint)
+            }
+            .padding(14)
+            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+
+    /// Frames match WidgetKit's real sizes on a Pro Max class phone (170 square, 364 x 170
+    /// medium), inset by the same 12pt the widget itself uses. The old 158 / 338 frames
+    /// were a guess and clipped the bottom row of both previews.
     private var widgetPreviewSection: some View {
         section("Widget preview", accent: UsageStyle.label) {
             let entry = UsageEntry(date: Date(), payload: store.payload, error: store.error)
+            let mediumWidth = min(364, UIScreen.main.bounds.width - 40)
             HStack(alignment: .top, spacing: 16) {
-                widgetChrome(width: 158, height: 158) {
+                widgetChrome(width: 170, height: 170) {
                     UsageWidgetView(entry: entry, family: .small)
                 }
                 VStack(alignment: .leading, spacing: 16) {
-                    widgetChrome(width: 170, height: 74) {
+                    widgetChrome(width: 172, height: 76) {
                         UsageWidgetView(entry: entry, family: .rectangular)
                     }
                 }
             }
-            widgetChrome(width: 338, height: 158) {
+            widgetChrome(width: mediumWidth, height: 170) {
                 UsageWidgetView(entry: entry, family: .medium)
             }
         }
@@ -373,6 +390,9 @@ struct ContentView: View {
 /// surface, and none of this belongs on a home screen.
 struct TokenHistoryView: View {
     let tokens: TokenUsage
+    var title: String = "Token history"
+    var unit: String = "messages"
+    var caveat: String = ""
 
     var body: some View {
         ScrollView {
@@ -381,12 +401,12 @@ struct TokenHistoryView: View {
                 chart
                 costSection
                 models
-                caveat
+                caveatView
             }
             .padding(20)
         }
         .background(UsageStyle.background)
-        .navigationTitle("Token history")
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -394,8 +414,10 @@ struct TokenHistoryView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 14) {
                 stat("Tokens", UsageStyle.compact(tokens.billed), "input + output + cache writes")
-                stat("Messages", UsageStyle.grouped(tokens.messages),
-                     "logged replies · \(UsageStyle.grouped(tokens.apiMessages)) API messages")
+                stat(unit.capitalized, UsageStyle.grouped(tokens.messages),
+                     unit == "turns"
+                        ? "across \(UsageStyle.grouped(tokens.apiMessages)) sessions"
+                        : "logged replies · \(UsageStyle.grouped(tokens.apiMessages)) API messages")
             }
             HStack(alignment: .top, spacing: 14) {
                 stat("Cache reads", UsageStyle.compact(tokens.cacheRead), "cheap, excluded above")
@@ -562,8 +584,9 @@ struct TokenHistoryView: View {
     }
 
     /// "claude-haiku-4-5-20251001" -> "Haiku 4.5". Version parts are hyphenated
-    /// upstream, and a trailing build date is noise.
+    /// upstream, and a trailing build date is noise. Other vendors' ids are left alone.
     private func prettyModel(_ id: String) -> String {
+        guard id.hasPrefix("claude-") else { return id }
         let parts = id.split(separator: "-")
             .map(String.init)
             .filter { $0 != "claude" && !($0.count == 8 && $0.allSatisfy(\.isNumber)) }
@@ -573,10 +596,11 @@ struct TokenHistoryView: View {
         return version.isEmpty ? title : "\(title) \(version)"
     }
 
-    private var caveat: some View {
-        Text("Claude Code sessions on the collector machine only: not claude.ai, and not "
-             + "Grok or Antigravity, which report percentages but no token counts.")
-            .font(.caption2)
-            .foregroundStyle(UsageStyle.faint)
+    @ViewBuilder private var caveatView: some View {
+        if !caveat.isEmpty {
+            Text(caveat)
+                .font(.caption2)
+                .foregroundStyle(UsageStyle.faint)
+        }
     }
 }

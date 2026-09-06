@@ -56,7 +56,8 @@ _cache = {"ts": 0.0, "data": None}
 # stop presenting it as current.
 PUSH_MAX_AGE = 2700
 PUSH_STATE = os.path.join(BASE, "pushed.json")
-_pushed = {"at": 0, "claude": None, "antigravity": None, "tokens": None, "codex": None}
+_pushed = {"at": 0, "claude": None, "antigravity": None, "tokens": None, "codex": None,
+           "codex_tokens": None}
 try:
     # Survive a restart: otherwise the pushed rows vanish until the collector's next run.
     _pushed.update(json.load(open(PUSH_STATE)))
@@ -447,6 +448,8 @@ def get_usage(force=False):
 
         if _pushed["tokens"]:
             out["tokens"] = _pushed["tokens"]
+        if _pushed.get("codex_tokens"):
+            out["codex_tokens"] = _pushed["codex_tokens"]
 
         if _pushed["codex"]:
             out["codex"] = _pushed["codex"]
@@ -488,6 +491,7 @@ class H(BaseHTTPRequestHandler):
             _pushed["antigravity"] = d.get("antigravity")
             _pushed["tokens"] = d.get("tokens")
             _pushed["codex"] = d.get("codex")
+            _pushed["codex_tokens"] = d.get("codex_tokens")
             _cache["ts"] = 0.0          # force the next read to fold in what just arrived
             try:
                 json.dump(_pushed, open(PUSH_STATE, "w"))
