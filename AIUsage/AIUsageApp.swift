@@ -248,8 +248,9 @@ struct ContentView: View {
         .padding(.bottom, 6)
     }
 
-    /// One link per source that reports token counts. Grok and Antigravity never will:
-    /// neither keeps a per-message log on disk, and their APIs expose percentages only.
+    /// One link per source that keeps a token log on disk. Antigravity is the one that
+    /// cannot: it stores protobuf trajectories with no token counts, and its local RPCs
+    /// (quota summary, user status) return fractions and credits only.
     @ViewBuilder private var historyLink: some View {
         if let t = store.payload?.tokens, t.ok == true {
             historyRow(t, title: "Claude Code token history", unit: "messages",
@@ -258,8 +259,14 @@ struct ContentView: View {
         if let t = store.payload?.codexTokens, t.ok == true {
             historyRow(t, title: "Codex token history", unit: "turns",
                        caveat: "Codex CLI sessions on the collector machine only, read from its "
-                             + "session rollouts. Not the ChatGPT app. No cost figure: plan models "
-                             + "have no published per-token list price.")
+                             + "session rollouts. Not the ChatGPT app. Cost uses OpenAI's published "
+                             + "standard-tier list prices.")
+        }
+        if let t = store.payload?.grokTokens, t.ok == true {
+            historyRow(t, title: "Grok token history", unit: "turns",
+                       caveat: "Grok CLI sessions on the collector machine only, read from its "
+                             + "session update logs. Not grok.com chat. Cost is the figure the Grok "
+                             + "CLI records itself per turn.")
         }
     }
 
@@ -507,7 +514,8 @@ struct TokenHistoryView: View {
 
                 Divider().overlay(UsageStyle.faint.opacity(0.3))
 
-                ForEach(costTypeRows(c), id: \.0) { label, value in
+                // Grok reports one figure per model with no per-type split.
+                ForEach(c.byType == nil ? [] : costTypeRows(c), id: \.0) { label, value in
                     HStack {
                         Text(label)
                             .font(.subheadline)

@@ -23,6 +23,7 @@ struct UsagePayload: Decodable {
     var antigravity: AntigravityUsage?
     var tokens: TokenUsage?
     var codexTokens: TokenUsage?
+    var grokTokens: TokenUsage?
     var updated: TimeInterval?
     var stale: Bool?
     var claudeError: String?
@@ -38,6 +39,7 @@ struct UsagePayload: Decodable {
     enum CodingKeys: String, CodingKey {
         case claude, grok, gemini, codex, antigravity, tokens, updated, stale
         case codexTokens = "codex_tokens"
+        case grokTokens = "grok_tokens"
         case claudeError = "claude_error"
         case claudeSource = "claude_source"
         case antigravityStale = "antigravity_stale"

@@ -6,8 +6,10 @@ Sources that only the collector machine can reach:
   * Antigravity - its quota RPC is served by a local language_server on loopback.
   * Codex    - the ChatGPT plan quota, read with the Codex CLI's stored access token.
   * tokens   - Claude Code token history from the local session logs, with a costing.
-  * codex_tokens - Codex CLI token history from its local session rollouts (no costing:
-    Codex plan models have no published per-token list price to convert against).
+  * codex_tokens - Codex CLI token history from its local session rollouts, priced at
+    OpenAI's published list rates.
+  * grok_tokens - Grok CLI token history from its session update logs, with the cost the
+    CLI itself records per turn.
 
 Only computed percentages are pushed. No credentials leave this machine.
 Read-only with respect to Claude's credential file: if the access token has expired we
@@ -29,7 +31,8 @@ except Exception:
     CFG = {}
 AGG = CFG.get("aggregator", "http://100.x.x.x:8756").rstrip("/") + "/push"
 TOKEN = CFG.get("token", "REPLACE_ME")
-PROVIDERS = CFG.get("providers", ["claude", "antigravity", "codex", "tokens", "codex_tokens"])
+PROVIDERS = CFG.get("providers", ["claude", "antigravity", "codex", "tokens", "codex_tokens",
+                                  "grok_tokens"])
 CURRENCY = CFG.get("currency", "USD")
 CREDS = os.path.expanduser("~/.claude/.credentials.json")
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
@@ -207,6 +210,15 @@ def fetch_codex():
 # USD per million tokens, list price. Cache write is 1.25x input (5-minute TTL,
 # the default Claude Code uses); cache read is 0.1x input.
 PRICING = {
+    # OpenAI standard tier, short context, verified 2026-09-06 at
+    # developers.openai.com/api/docs/pricing. Cached input is 0.1x and cache writes
+    # 1.25x for these too, so the same multipliers apply. gpt-5.5 is the standard rate
+    # (its Fast-mode price is listed at exactly double).
+    "gpt-6-astra":       (10.0, 50.0),
+    "gpt-5.6-sol":       (4.0, 20.0),
+    "gpt-5.6-terra":     (2.0, 12.0),
+    "gpt-5.6-luna":      (0.2, 1.2),
+    "gpt-5.5":           (6.25, 37.5),
     "claude-fable-5":    (10.0, 50.0),
     "claude-opus-4-8":   (5.0, 25.0),
     "claude-opus-4-7":   (5.0, 25.0),
@@ -478,6 +490,7 @@ def fetch_codex_tokens():
     tot = collections.Counter()
     byday = collections.defaultdict(collections.Counter)
     models = collections.Counter()
+    bymodel = collections.defaultdict(collections.Counter)
     sessions = turns = 0
     for ent in index.values():
         u = ent.get("usage")
@@ -487,13 +500,22 @@ def fetch_codex_tokens():
         turns += ent.get("turns", 0)
         inp, out = u.get("input_tokens", 0) or 0, u.get("output_tokens", 0) or 0
         cached_in = u.get("cached_input_tokens", 0) or 0
+        cache_w = u.get("cache_write_input_tokens", 0) or 0
         tot["input"] += inp; tot["output"] += out; tot["cache_read"] += cached_in
+        tot["cache_write"] += cache_w
         day = ent.get("day") or ""
         if day:
             byday[day]["billed"] += inp - cached_in + out
             byday[day]["msgs"] += ent.get("turns", 0)
         if ent.get("model"):
             models[ent["model"]] += ent.get("turns", 0) or 1
+            # Same key names price() expects for Claude; OpenAI's input_tokens includes
+            # the cached part, so split it out here.
+            bm = bymodel[ent["model"]]
+            bm["input_tokens"] += inp - cached_in
+            bm["cache_read_input_tokens"] += cached_in
+            bm["cache_creation_input_tokens"] += cache_w
+            bm["output_tokens"] += out
     if not sessions:
         return {"error": "no_sessions"}
     days = sorted(byday)[-TOKEN_DAYS:]
@@ -507,8 +529,9 @@ def fetch_codex_tokens():
         "cache_read": tot["cache_read"],
         "input": tot["input"],
         "output": tot["output"],
-        "cache_creation": 0,
+        "cache_creation": tot["cache_write"],
         "models": dict(models.most_common(8)),
+        "cost": price(bymodel),
         "days": [{"d": d, "billed": byday[d]["billed"], "msgs": byday[d]["msgs"]} for d in days],
     }
     try:
@@ -518,10 +541,99 @@ def fetch_codex_tokens():
     return data
 
 
+GROK_SESSIONS = os.path.expanduser("~/.grok/sessions")
+GROK_TOKEN_CACHE = os.path.join(STATE_DIR, "grok-tokens.json")
+
+
+def fetch_grok_tokens():
+    """Lifetime + daily Grok CLI token usage from ~/.grok/sessions/*/*/updates.jsonl.
+
+    Every completed turn logs a `usage` block with per-model tokens and the CLI's own
+    cost in `costUsdTicks` (nano-dollars: a 2.7M-token turn logged 3.81e9 ticks against
+    $3.68 by list price, so 1e9 ticks = US$1). That figure is used as the cost rather
+    than a pricing table of our own."""
+    try:
+        cached = json.load(open(GROK_TOKEN_CACHE))
+        if time.time() - cached.get("at", 0) < TOKEN_TTL:
+            return cached["data"]
+    except Exception:
+        pass
+    import collections, datetime, glob
+    tot = collections.Counter()
+    byday = collections.defaultdict(collections.Counter)
+    models = collections.Counter()
+    bymodel = collections.defaultdict(collections.Counter)
+    turns = calls = 0
+    sessions = set()
+    for f in glob.glob(os.path.join(GROK_SESSIONS, "*", "*", "updates.jsonl")):
+        try:
+            for line in open(f, errors="replace"):
+                if '"turn_completed"' not in line or '"usage"' not in line:
+                    continue
+                try:
+                    d = json.loads(line)
+                    u = d["params"]["update"]["usage"]
+                except Exception:
+                    continue
+                turns += 1
+                sessions.add(f)
+                calls += u.get("modelCalls", 0) or 0
+                inp = u.get("inputTokens", 0) or 0
+                out = u.get("outputTokens", 0) or 0
+                cached_in = u.get("cachedReadTokens", 0) or 0
+                tot["input"] += inp; tot["output"] += out; tot["cache_read"] += cached_in
+                tot["cache_write"] += u.get("cacheCreationTokens", 0) or 0
+                tot["ticks"] += u.get("costUsdTicks", 0) or 0
+                day = datetime.datetime.fromtimestamp(
+                    d.get("timestamp", 0), datetime.timezone.utc).date().isoformat()
+                byday[day]["billed"] += inp - cached_in + out
+                byday[day]["msgs"] += 1
+                for m, mu in (u.get("modelUsage") or {}).items():
+                    models[m] += mu.get("modelCalls", 0) or 1
+                    bymodel[m]["ticks"] += mu.get("costUsdTicks", 0) or 0
+        except Exception:
+            pass
+    if not turns:
+        return {"error": "no_sessions"}
+    fx, as_of, stale = fx_rate()
+    if not fx:
+        cost = {"error": "no_fx_rate"}
+    else:
+        rows = sorted(({"model": m, "cost": round(c["ticks"] / 1e9 * fx, 2)}
+                       for m, c in bymodel.items()), key=lambda r: -r["cost"])
+        basis = "cost as reported by the Grok CLI itself (costUsdTicks, 1e9 = US$1)"
+        if CURRENCY != "USD":
+            basis += ", converted at %.4f USD/%s (%s)" % (fx, CURRENCY, as_of or "unknown")
+        if stale:
+            basis = "STALE RATE - " + basis
+        cost = {"currency": CURRENCY, "total": round(tot["ticks"] / 1e9 * fx, 2),
+                "by_model": rows, "fx_rate": fx, "fx_as_of": as_of, "fx_stale": stale,
+                "basis": basis}
+    days = sorted(byday)[-TOKEN_DAYS:]
+    data = {
+        "ok": True,
+        "messages": turns,
+        "api_messages": len(sessions),
+        "billed": tot["input"] - tot["cache_read"] + tot["output"],
+        "cache_read": tot["cache_read"],
+        "input": tot["input"],
+        "output": tot["output"],
+        "cache_creation": tot["cache_write"],
+        "models": dict(models.most_common(8)),
+        "cost": cost,
+        "days": [{"d": d, "billed": byday[d]["billed"], "msgs": byday[d]["msgs"]} for d in days],
+    }
+    try:
+        json.dump({"at": int(time.time()), "data": data}, open(GROK_TOKEN_CACHE, "w"))
+    except Exception:
+        pass
+    return data
+
+
 def main():
     fetchers = {"claude": fetch_claude, "antigravity": fetch_antigravity,
                 "codex": fetch_codex, "tokens": fetch_tokens,
-                "codex_tokens": fetch_codex_tokens}
+                "codex_tokens": fetch_codex_tokens, "grok_tokens": fetch_grok_tokens}
     payload = {name: fetchers[name]() for name in PROVIDERS if name in fetchers}
     payload["at"] = int(time.time())
     body = json.dumps(payload).encode()
