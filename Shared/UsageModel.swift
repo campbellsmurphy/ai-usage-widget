@@ -275,11 +275,12 @@ struct TokenUsage: Decodable {
         var total: Double?
         var byType: [String: Double]?
         var byModel: [ModelCost]?
+        var unpriced: [String]?
         var basis: String?
         var fxStale: Bool?
 
         enum CodingKeys: String, CodingKey {
-            case currency, total, basis
+            case currency, total, basis, unpriced
             case fxStale = "fx_stale"
             case byType = "by_type"
             case byModel = "by_model"
