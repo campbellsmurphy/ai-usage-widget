@@ -144,6 +144,10 @@ struct CodexUsage: Decodable {
     var credits: Credits?
     /// Free early resets the plan has banked; spending one refills an exhausted window.
     var resetCredits: Int?
+    /// How many of those can be applied right now. Held is not the same as usable: a credit
+    /// sits at applicable 0 until a window is actually exhausted, which is why ChatGPT's own
+    /// usage screen shows nothing while one is on the account.
+    var resetCreditsApplicable: Int?
     var error: String?
     /// Set only when the collector is replaying its last good reading.
     var readingAge: Int?
@@ -151,6 +155,7 @@ struct CodexUsage: Decodable {
     enum CodingKeys: String, CodingKey {
         case ok, plan, windows, credits, error
         case resetCredits = "reset_credits"
+        case resetCreditsApplicable = "reset_credits_applicable"
         case readingAge = "reading_age"
     }
 

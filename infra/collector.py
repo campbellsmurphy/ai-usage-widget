@@ -168,6 +168,7 @@ def _codex_last_good(error):
         return {"error": error}
     return {"ok": True, "plan": c.get("plan"), "windows": c["windows"],
             "credits": c.get("credits"), "reset_credits": c.get("reset_credits"),
+            "reset_credits_applicable": c.get("reset_credits_applicable"),
             "error": error, "reading_age": int(time.time()) - c["at"]}
 
 
@@ -213,12 +214,17 @@ def fetch_codex():
     # Credits and reset credits are the two levers left once a window is spent, and the
     # ChatGPT app shows them alongside the bar, so carry them rather than only the bar.
     cr = d.get("credits") or {}
+    _rlrc = d.get("rate_limit_reset_credits") or {}
     out = {"ok": True, "plan": d.get("plan_type"), "windows": windows,
            "credits": {"balance": _num(cr.get("balance")),
                        "unlimited": bool(cr.get("unlimited")),
                        "overage_limit_reached": bool(cr.get("overage_limit_reached"))},
-           "reset_credits": ((d.get("rate_limit_reset_credits") or {})
-                             .get("available_count"))}
+           # Two counts, and they mean different things: how many resets are held, and
+           # how many can be applied right now. Held-but-not-applicable is the normal
+           # state until a window is actually exhausted, which is why ChatGPT's own
+           # screen shows nothing while one sits on the account.
+           "reset_credits": _rlrc.get("available_count"),
+           "reset_credits_applicable": _rlrc.get("applicable_available_count")}
     try:
         json.dump({"at": int(time.time()), **out}, open(CODEX_CACHE, "w"))
     except Exception:

@@ -178,10 +178,14 @@ struct ContentView: View {
                         .foregroundStyle(UsageStyle.faint)
                 }
                 if let n = codex?.resetCredits, n > 0 {
-                    Text(n == 1 ? "1 reset credit available"
-                                : "\(n) reset credits available")
+                    // Usable now is the only version worth colouring: a held credit that
+                    // cannot be applied yet is background, not a prompt to act.
+                    let usable = codex?.resetCreditsApplicable ?? 0
+                    let noun = n == 1 ? "reset credit" : "reset credits"
+                    Text(usable > 0 ? "\(n) \(noun), usable now"
+                                    : "\(n) \(noun) held, not applicable until a window is spent")
                         .font(.caption2)
-                        .foregroundStyle(UsageStyle.codex)
+                        .foregroundStyle(usable > 0 ? UsageStyle.codex : UsageStyle.faint)
                 }
                 if let codex, codex.frozen {
                     Text(codex.frozenNote)
