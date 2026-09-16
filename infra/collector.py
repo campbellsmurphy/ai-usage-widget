@@ -152,14 +152,23 @@ CODEX_URL = "https://chatgpt.com/backend-api/codex/usage"
 CODEX_CACHE = os.path.join(STATE_DIR, "codex.json")
 
 
+def _num(v):
+    """The balance arrives as a decimal string."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def _codex_last_good(error):
     """Same hazard as Antigravity: an empty row looks exactly like 0% used."""
     try:
         c = json.load(open(CODEX_CACHE))
     except Exception:
         return {"error": error}
-    return {"ok": True, "plan": c.get("plan"), "windows": c["windows"], "error": error,
-            "reading_age": int(time.time()) - c["at"]}
+    return {"ok": True, "plan": c.get("plan"), "windows": c["windows"],
+            "credits": c.get("credits"), "reset_credits": c.get("reset_credits"),
+            "error": error, "reading_age": int(time.time()) - c["at"]}
 
 
 def fetch_codex():
@@ -201,7 +210,15 @@ def fetch_codex():
     if not windows:
         return _codex_last_good("no_windows")
 
-    out = {"ok": True, "plan": d.get("plan_type"), "windows": windows}
+    # Credits and reset credits are the two levers left once a window is spent, and the
+    # ChatGPT app shows them alongside the bar, so carry them rather than only the bar.
+    cr = d.get("credits") or {}
+    out = {"ok": True, "plan": d.get("plan_type"), "windows": windows,
+           "credits": {"balance": _num(cr.get("balance")),
+                       "unlimited": bool(cr.get("unlimited")),
+                       "overage_limit_reached": bool(cr.get("overage_limit_reached"))},
+           "reset_credits": ((d.get("rate_limit_reset_credits") or {})
+                             .get("available_count"))}
     try:
         json.dump({"at": int(time.time()), **out}, open(CODEX_CACHE, "w"))
     except Exception:
@@ -888,6 +905,14 @@ def main():
                 "agy_tokens": fetch_agy_tokens}
     payload = {name: fetchers[name]() for name in PROVIDERS if name in fetchers}
     payload["at"] = int(time.time())
+    # 2026-09-15: local copy of the Claude plan percentages (no credentials) for the family-tree
+    # loop's weekly budget gate (~/.claude/scripts/ftr-claude-budget.sh).
+    c = payload.get("claude") or {}
+    if c.get("ok"):
+        try:
+            json.dump({"at": int(time.time()), **c}, open(os.path.join(STATE_DIR, "claude.json"), "w"))
+        except Exception:
+            pass
     body = json.dumps(payload).encode()
     req = urllib.request.Request(AGG + "?k=" + TOKEN, data=body, method="POST",
                                  headers={"Content-Type": "application/json"})

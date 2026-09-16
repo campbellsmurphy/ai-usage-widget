@@ -168,6 +168,21 @@ struct ContentView: View {
                               w.percent, w.resetsDate, expected: w.expectedResetsDate,
                               expectedWindows: w.expectedWindows)
                 }
+                // The two levers once a window is spent. The ChatGPT app gives credits
+                // their own section; a reset credit is only worth surfacing when held.
+                if let credits = codex?.credits {
+                    Text(credits.overageLimitReached == true
+                         ? "Credits: \(credits.text), overage limit reached"
+                         : "Credits: \(credits.text)")
+                        .font(.caption2)
+                        .foregroundStyle(UsageStyle.faint)
+                }
+                if let n = codex?.resetCredits, n > 0 {
+                    Text(n == 1 ? "1 reset credit available"
+                                : "\(n) reset credits available")
+                        .font(.caption2)
+                        .foregroundStyle(UsageStyle.codex)
+                }
                 if let codex, codex.frozen {
                     Text(codex.frozenNote)
                         .font(.caption2)

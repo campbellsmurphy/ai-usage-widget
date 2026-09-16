@@ -141,13 +141,37 @@ struct CodexUsage: Decodable {
     var ok: Bool?
     var plan: String?
     var windows: [Window]?
+    var credits: Credits?
+    /// Free early resets the plan has banked; spending one refills an exhausted window.
+    var resetCredits: Int?
     var error: String?
     /// Set only when the collector is replaying its last good reading.
     var readingAge: Int?
 
     enum CodingKeys: String, CodingKey {
-        case ok, plan, windows, error
+        case ok, plan, windows, credits, error
+        case resetCredits = "reset_credits"
         case readingAge = "reading_age"
+    }
+
+    /// Paid usage beyond the plan limits. Separate from the windows: it is what is left
+    /// to spend once a window is full, not a share of one.
+    struct Credits: Decodable {
+        var balance: Double?
+        var unlimited: Bool?
+        var overageLimitReached: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case balance, unlimited
+            case overageLimitReached = "overage_limit_reached"
+        }
+
+        var text: String {
+            if unlimited == true { return "unlimited" }
+            guard let balance else { return "unknown" }
+            return balance == balance.rounded()
+                ? "\(Int(balance)) credits" : String(format: "%.2f credits", balance)
+        }
     }
 
     struct Window: Decodable, Identifiable {
