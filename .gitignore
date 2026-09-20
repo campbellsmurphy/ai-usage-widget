@@ -6,6 +6,7 @@ xcuserdata/
 
 # Secrets and per-install identity: never commit. See Shared/Secrets.example.swift
 Shared/Secrets.swift
+Shared/Secrets.swift.*
 .team-id
 infra/*.local.*
 

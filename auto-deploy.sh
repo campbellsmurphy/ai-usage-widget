@@ -49,11 +49,20 @@ for dev in d.get("result", {}).get("devices", []):
 [ -z "$UDID" ] && exit 0
 
 # --- should we deploy? ------------------------------------------------------
-DECISION=$(python3 - "$STATE" "$RENEW_WINDOW_H" "$DAY_FLOOR" "$MIN_GAP_H" "$TEAM" "$BUNDLE" <<'PY'
+# Source fingerprint. The profile-expiry trigger renews the certificate but knows
+# nothing about the code changing, so an edit could sit undeployed for days: when the
+# aggregator moves to a new host, the phone keeps querying the retired one until someone
+# notices the widget has gone blank.
+SRCHASH=$(find "$REPO/Shared" "$REPO/AIUsage" "$REPO/AIUsageWidget" -type f \
+    \( -name '*.swift' -o -name '*.plist' -o -name '*.entitlements' \) -print0 2>/dev/null \
+    | sort -z | xargs -0 shasum -a 256 2>/dev/null | shasum -a 256 | cut -c1-16)
+
+DECISION=$(python3 - "$STATE" "$RENEW_WINDOW_H" "$DAY_FLOOR" "$MIN_GAP_H" "$TEAM" "$BUNDLE" "$SRCHASH" <<'PY'
 import datetime, glob, json, os, plistlib, subprocess, sys
 
 state_path, window_h, day_floor, min_gap_h = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4])
 team, bundle = sys.argv[5], sys.argv[6]
+srchash = sys.argv[7] if len(sys.argv) > 7 else ""
 now = datetime.datetime.now(datetime.timezone.utc)
 
 # Both App IDs need a live profile: the app will not install if either is missing or
@@ -95,7 +104,14 @@ expired = hours_left is None or hours_left <= 0
 near_expiry = hours_left is not None and hours_left < window_h
 floor_due = gap_h >= day_floor * 24
 
-if expired:
+src_changed = bool(srchash) and st.get("src_hash") not in (None, "", srchash)
+
+# Gap-guarded like the other triggers: a deploy that keeps failing (a 12040 mount
+# error survives until the phone is unlocked and awake) would otherwise rebuild and
+# re-mint every 30 minutes for as long as the edit stays undeployed.
+if src_changed and gap_h >= min_gap_h:
+    reason = "source changed since last deploy (%s -> %s)" % (st.get("src_hash", "none"), srchash)
+elif expired:
     reason = "profile expired"
 elif near_expiry and gap_h >= min_gap_h:
     reason = "profile expires in %.1fh" % hours_left
@@ -110,7 +126,7 @@ else:
                       "reason": "profile has %.1fh left (renew window %.0fh) and %.1f days since last attempt (floor %.0f)" % (hours_left, window_h, gap_h / 24, day_floor)}))
     sys.exit(0)
 
-print(json.dumps({"go": True, "reason": reason, "hours_left": hours_left}))
+print(json.dumps({"go": True, "reason": reason, "hours_left": hours_left, "src_hash": srchash}))
 PY
 )
 GO=$(printf '%s' "$DECISION" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("go"))' 2>/dev/null)
@@ -168,7 +184,7 @@ fi
 rm -rf "$STASH"
 
 # --- record outcome, and whether the profile actually moved -----------------
-python3 - "$STATE" "$RC" "$BEFORE" "$TEAM" "$BUNDLE" >/dev/null 2>&1 <<'PY'
+python3 - "$STATE" "$RC" "$BEFORE" "$TEAM" "$BUNDLE" "$SRCHASH" >/dev/null 2>&1 <<'PY'
 import datetime, glob, json, os, plistlib, subprocess, sys
 state_path, rc, before = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 team, bundle = sys.argv[4], sys.argv[5]
@@ -187,11 +203,20 @@ for p in glob.glob(os.path.expanduser("~/Library/Developer/Xcode/UserData/Provis
     h = (exp - now).total_seconds() / 3600
     found[appid] = h if appid not in found else max(found[appid], h)
 after = 0.0 if any(a not in found for a in NEEDED) else min(found.values())
-st = {"last_attempt_at": now.timestamp(),
-      "last_rc": rc,
-      "hours_left_after": round(after, 1) if after is not None else None}
+# Merge, never replace: a failed attempt that dropped src_hash left the source-change
+# trigger permanently disabled, because an absent hash reads as "never deployed".
+try:
+    st = json.load(open(state_path))
+except Exception:
+    st = {}
+st.update({"last_attempt_at": now.timestamp(),
+           "last_rc": rc,
+           "hours_left_after": round(after, 1) if after is not None else None})
 if rc == 0:
     st["last_success_at"] = now.timestamp()
+    # Record what was actually deployed, so a later edit is detectable.
+    if len(sys.argv) > 6 and sys.argv[6]:
+        st["src_hash"] = sys.argv[6]
 json.dump(st, open(state_path, "w"))
 PY
 AFTER=$(python3 -c "import json;print(json.load(open('$STATE')).get('hours_left_after'))" 2>/dev/null)
