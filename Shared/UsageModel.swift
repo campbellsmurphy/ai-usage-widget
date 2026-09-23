@@ -88,7 +88,28 @@ struct UsagePayload: Decodable {
 struct ClaudeUsage: Decodable {
     var ok: Bool?
     var limits: Limits?
+    var limitReset: LimitReset?
     var error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, limits, error
+        case limitReset = "limit_reset"
+    }
+
+    /// A promotional reset of every Claude window at once. Unlike a Codex credit it needs no
+    /// limit to be hit first, so it can be spent at any time.
+    struct LimitReset: Decodable {
+        var left: Int?
+        var label: String?
+        var expiresAt: String?
+        var usableNow: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case left, label
+            case expiresAt = "expires_at"
+            case usableNow = "usable_now"
+        }
+    }
 
     struct Limits: Decodable {
         var session: Limit?

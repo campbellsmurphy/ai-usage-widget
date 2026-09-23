@@ -66,6 +66,11 @@ struct UsageWidgetView: View {
                     metric(limits.weeklyScoped?.model ?? "Scoped",
                            limits.weeklyScoped?.percent,
                            reset: limits.weeklyScoped?.resetsDate)
+                    if let n = claude?.limitReset?.left, n > 0 {
+                        Text("\(n) reset banked")
+                            .font(.system(size: 9))
+                            .foregroundStyle(UsageStyle.faint)
+                    }
                 } else if hasClaude {
                     unavailable("CLAUDE", entry.payload?.claude?.error)
                 } else if !hasAny {

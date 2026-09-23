@@ -75,7 +75,27 @@ def fetch_claude():
     return {"ok": True,
             "five_hour": (b.get("five_hour") or {}).get("utilization"),
             "seven_day": (b.get("seven_day") or {}).get("utilization"),
-            "limits": limits}
+            "limits": limits, "limit_reset": _claude_limit_reset(tok)}
+
+
+def _claude_limit_reset(tok):
+    """Promotional usage-limit resets (e.g. the Opus 5.5 launch grant). Only reported to a
+    caller that identifies as the CLI: anything else gets eligible false, reason "surface",
+    and an empty list, which would read as "no reset" when one is held."""
+    req = urllib.request.Request(USAGE_URL + "?cedar_ember=1&skip_spend=1", headers={
+        "Authorization": "Bearer " + tok,
+        "anthropic-beta": "oauth-2025-04-20",
+        "User-Agent": "claude-cli/2.1.280 (external, cli)"})
+    try:
+        c = json.loads(urllib.request.urlopen(req, timeout=20).read()).get("cedar_ember") or {}
+    except Exception:
+        return None
+    grants = [g for g in c.get("grants") or [] if (g.get("resets_left") or 0) > 0]
+    if not grants:
+        return {"left": 0}
+    g = min(grants, key=lambda g: g.get("ends_at") or "9")
+    return {"left": sum(x["resets_left"] for x in grants), "label": g.get("label"),
+            "expires_at": g.get("ends_at"), "usable_now": bool(g.get("usable_now"))}
 
 
 def _antigravity_endpoint():

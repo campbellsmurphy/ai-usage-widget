@@ -532,6 +532,12 @@ def get_usage(force=False):
             out["claude_error"] = claude["error"]
             out["stale"] = True
 
+        # The reset grant is only read by the collector, so carry it across even when this
+        # machine's own Claude reading wins.
+        lr = (_pushed["claude"] or {}).get("limit_reset")
+        if lr is not None and (out.get("claude") or {}).get("ok") and "limit_reset" not in out["claude"]:
+            out["claude"] = dict(out["claude"], limit_reset=lr)
+
         if _pushed["tokens"]:
             out["tokens"] = _pushed["tokens"]
         if _pushed.get("codex_tokens"):

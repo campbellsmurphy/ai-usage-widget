@@ -134,6 +134,16 @@ struct ContentView: View {
                 limitRow("Weekly, all models", limits.weeklyAll)
                 limitRow(limits.weeklyScoped?.model.map { "Weekly, \($0)" } ?? "Weekly, scoped",
                          limits.weeklyScoped)
+                if let r = claude?.limitReset, let n = r.left, n > 0 {
+                    Text("\(n) limit \(n == 1 ? "reset" : "resets") banked (\(r.label ?? "promotional"))")
+                        .font(.caption2)
+                        .foregroundStyle(UsageStyle.faint)
+                    if let exp = r.expiresAt.flatMap(UsageDate.parse) {
+                        Text("Expires \(exp.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()))")
+                            .font(.caption2)
+                            .foregroundStyle(UsageStyle.faint)
+                    }
+                }
             } else {
                 Text(claude?.error ?? "No Claude data")
                     .font(.callout)
