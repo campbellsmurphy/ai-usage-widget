@@ -92,6 +92,11 @@ struct UsageWidgetView: View {
                             .font(.system(size: 9))
                             .foregroundStyle(UsageStyle.faint)
                     }
+                    if let n = codex?.resetCredits, n > 0 {
+                        Text("\(n) reset \(codex?.resetCreditAdvice == "redeem" ? "· redeem" : "banked")")
+                            .font(.system(size: 9, weight: codex?.resetCreditAdvice == "redeem" ? .bold : .regular))
+                            .foregroundStyle(codex?.resetCreditAdvice == "redeem" ? UsageStyle.codex : UsageStyle.faint)
+                    }
                     Spacer(minLength: 7)
                 }
                 if hasAntigravity {

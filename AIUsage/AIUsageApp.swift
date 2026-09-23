@@ -177,15 +177,24 @@ struct ContentView: View {
                         .font(.caption2)
                         .foregroundStyle(UsageStyle.faint)
                 }
-                if let n = codex?.resetCredits, n > 0 {
-                    // Usable now is the only version worth colouring: a held credit that
-                    // cannot be applied yet is background, not a prompt to act.
-                    let usable = codex?.resetCreditsApplicable ?? 0
+                if let codex, let n = codex.resetCredits, n > 0 {
+                    // Only "redeem" is coloured: a credit that is usable but about to be
+                    // made pointless by the window rolling itself is a reason to wait.
                     let noun = n == 1 ? "reset credit" : "reset credits"
-                    Text(usable > 0 ? "\(n) \(noun), usable now"
-                                    : "\(n) \(noun) held, not applicable until a window is spent")
+                    let hours = codex.resetCreditBackInHours.map { String(format: "%.0f h", $0) } ?? "soon"
+                    let advice: String = switch codex.resetCreditAdvice {
+                    case "redeem": "\(n) \(noun), worth redeeming: \(hours) left in a spent window"
+                    case "bank": "\(n) \(noun), bank it: window rolls itself in \(hours)"
+                    default: "\(n) \(noun) held, not applicable until a window is spent"
+                    }
+                    Text(advice)
                         .font(.caption2)
-                        .foregroundStyle(usable > 0 ? UsageStyle.codex : UsageStyle.faint)
+                        .foregroundStyle(codex.resetCreditAdvice == "redeem" ? UsageStyle.codex : UsageStyle.faint)
+                    if let exp = codex.resetCreditExpiresAt.flatMap(UsageDate.parse) {
+                        Text("Expires \(exp.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()))")
+                            .font(.caption2)
+                            .foregroundStyle(UsageStyle.faint)
+                    }
                 }
                 if let codex, codex.frozen {
                     Text(codex.frozenNote)

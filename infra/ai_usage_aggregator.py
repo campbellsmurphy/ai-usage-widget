@@ -39,6 +39,10 @@ OAUTH_TOKEN_URLS = [
 CLIENT_ID       = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 STATE  = os.path.join(BASE, "usage.json")
 BACKUP = os.path.join(BASE, "keychain-backup.json")
+# Claude Code on this box stores its OAuth blob in a file, not the login keychain
+# (verified 2026-09-09: no "Claude Code-credentials" item exists here at all, which
+# kc_read reported as "keychain_denied" because it swallowed every exception alike).
+CRED_FILE = os.path.expanduser("~/.claude/.credentials.json")
 GROK_CFG = os.path.join(BASE, "grok.json")   # {"cookie","ua"}
 RESET_STATE    = os.path.join(BASE, "reset-watch.json")
 RESET_MIN_PREV = 20    # only a meaningful amount of freed quota is worth a push
@@ -49,6 +53,8 @@ NEW_WINDOW     = 600   # resets_at moving further than this is a new window, not
 RESET_DROP     = 8     # ...and usage has to fall with it, or it is the same window re-anchoring
 CONTINUITY     = 3600  # a row absent longer than this was not watched, so nothing spanning it counts
 EXPECT_MARGIN  = 3600  # only worth saying when the estimate is meaningfully before the advertised time
+REDEEM_MIN_H   = 24    # a Codex reset credit is only worth spending with at least this long left to run
+CREDIT_WARN_H  = 72    # push once when a held credit is this close to expiring
 
 _cache = {"ts": 0.0, "data": None}
 # Pushed by the collector, which is the only machine that can reach Claude's token (when
@@ -70,9 +76,16 @@ def _sec(args):
     return subprocess.run(["security"] + args, capture_output=True, text=True, timeout=12)
 
 def kc_read():
+    """Keychain first, then Claude Code's on-disk credentials file."""
     try:
         raw = (_sec(["find-generic-password", "-s", KC_SERVICE, "-w"]).stdout or "").strip()
-        return json.loads(raw) if raw else None
+        if raw:
+            return json.loads(raw)
+    except Exception:
+        pass
+    try:
+        with open(CRED_FILE) as f:
+            return json.load(f)
     except Exception:
         return None
 
@@ -87,7 +100,19 @@ def kc_account():
 
 def kc_write(blob, acct):
     if not acct:
-        return False
+        # No keychain item: persist the refreshed token back to the file instead,
+        # otherwise every run burns a refresh and the rotated token is thrown away.
+        try:
+            import tempfile
+            d = os.path.dirname(CRED_FILE)
+            fd, tmp = tempfile.mkstemp(dir=d)
+            with os.fdopen(fd, "w") as f:
+                json.dump(blob, f)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, CRED_FILE)
+            return True
+        except Exception:
+            return False
     try:
         return _sec(["add-generic-password", "-U", "-a", acct, "-s", KC_SERVICE,
                      "-w", json.dumps(blob)]).returncode == 0
@@ -128,7 +153,7 @@ def get_access_token(force=False):
     """Returns (access_token, error). Refreshes + writes back when needed."""
     blob = kc_read()
     if not blob:
-        return None, "keychain_denied"
+        return None, "no_credentials"
     backup_once(blob)
     o = blob.get("claudeAiOauth", blob)
     now = time.time() * 1000
@@ -282,7 +307,14 @@ def fetch_grok():
         elif fn == 5 and wt == 2:                       # period end Timestamp
             ends = next((s for f2, w2, s in _pb_fields(v) if f2 == 1 and w2 == 0), None)
     if pct is None:
-        return {"error": "no_percent"}
+        # proto3 omits scalar fields at their default, so a genuine 0% arrives as an
+        # ABSENT float, not a zero one. Verified 2026-09-09 against grok.com > Settings
+        # > Usage, which read "0% used, Resets September 14 2026 10:04 PM" while field 1
+        # was missing and field 5 decoded to exactly that timestamp. Treat a well-formed
+        # body (period end present) as 0%, and only error when the body is unusable.
+        if ends is None:
+            return {"error": "no_percent"}
+        pct = 0.0
 
     return {"ok": True, "percent": round(pct), "window": "weekly",
             "resets_at": datetime.datetime.fromtimestamp(
@@ -408,12 +440,66 @@ def _watch_resets(out):
                 dest[prefix + "expected_resets_at"] = datetime.datetime.fromtimestamp(
                     expected, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 dest[prefix + "expected_windows"] = len(hist)
+    credits = _advise_reset_credit(out, st, now)
     try:
-        json.dump({"windows": windows, "events": events}, open(RESET_STATE, "w"))
+        json.dump({"windows": windows, "events": events, "credits": credits},
+                  open(RESET_STATE, "w"))
     except Exception:
         pass
     if events:
         out["early_resets"] = events
+
+
+def _advise_reset_credit(out, st, now):
+    """Say whether a held Codex reset credit is worth spending, and push when it matters.
+
+    Campbell's rule (2026-09-23): redeem only when a window is spent with a long stretch
+    still to run. When the window rolls on its own within hours, spending a credit buys
+    those few hours and throws away a full reset that could have been banked.
+    """
+    cx = out.get("codex") or {}
+    prev = st.get("credits") or {}
+    if not cx.get("ok") or cx.get("error") or out.get("codex_stale"):
+        return prev
+    n = cx.get("reset_credits") or 0
+    usable = cx.get("reset_credits_applicable") or 0
+    expires = _iso_epoch(cx.get("reset_credit_expires_at"))
+    spent = [_iso_epoch(w.get("resets_at")) for w in cx.get("windows") or []
+             if (w.get("percent") or 0) >= 100 and w.get("resets_at")]
+    back_in = (max(spent) - now) / 3600 if spent else None
+    if not n:
+        advice = None
+    elif usable and back_in is not None and back_in >= REDEEM_MIN_H:
+        advice = "redeem"
+    elif usable:
+        advice = "bank"
+    else:
+        advice = "held"
+    if advice:
+        out["codex"] = dict(cx, reset_credit_advice=advice,
+                            reset_credit_back_in_hours=None if back_in is None else round(back_in, 1))
+
+    exp_txt = (datetime.datetime.fromtimestamp(expires).strftime("%a %d %b %H:%M")
+               if expires else "unknown")
+    if n > prev.get("count", 0):
+        if advice == "redeem":
+            tail = "Window is spent with %.0f h still to run: worth redeeming." % back_in
+        elif advice == "bank":
+            tail = "Window rolls on its own in %.1f h: bank it." % back_in
+        else:
+            tail = "Not applicable until a window is spent: banked."
+        _ntfy("Codex reset credit granted", "%d held, expires %s. %s" % (n, exp_txt, tail))
+    elif advice == "redeem" and prev.get("advice") != "redeem":
+        _ntfy("Codex spent, reset credit worth using",
+              "Weekly quota is spent with %.0f h still to run. %d credit held, expires %s."
+              % (back_in, n, exp_txt))
+    warned = prev.get("warned_expiry")
+    if n and expires and expires - now < CREDIT_WARN_H * 3600 and warned != expires:
+        _ntfy("Codex reset credit expiring",
+              "%d unspent credit expires %s (%.0f h). Use it or lose it."
+              % (n, exp_txt, (expires - now) / 3600))
+        warned = expires
+    return {"count": n, "advice": advice, "warned_expiry": warned}
 
 
 def get_usage(force=False):

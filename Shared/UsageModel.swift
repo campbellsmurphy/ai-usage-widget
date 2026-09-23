@@ -148,6 +148,12 @@ struct CodexUsage: Decodable {
     /// sits at applicable 0 until a window is actually exhausted, which is why ChatGPT's own
     /// usage screen shows nothing while one is on the account.
     var resetCreditsApplicable: Int?
+    /// Soonest expiry among held credits; each lapses about 30 days after it is granted.
+    var resetCreditExpiresAt: String?
+    /// The aggregator's call: "redeem" (spent with a long stretch to run), "bank" (spent,
+    /// but the window rolls on its own soon), or "held" (nothing spent yet).
+    var resetCreditAdvice: String?
+    var resetCreditBackInHours: Double?
     var error: String?
     /// Set only when the collector is replaying its last good reading.
     var readingAge: Int?
@@ -156,6 +162,9 @@ struct CodexUsage: Decodable {
         case ok, plan, windows, credits, error
         case resetCredits = "reset_credits"
         case resetCreditsApplicable = "reset_credits_applicable"
+        case resetCreditExpiresAt = "reset_credit_expires_at"
+        case resetCreditAdvice = "reset_credit_advice"
+        case resetCreditBackInHours = "reset_credit_back_in_hours"
         case readingAge = "reading_age"
     }
 

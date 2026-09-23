@@ -149,6 +149,7 @@ def fetch_antigravity():
 
 CODEX_AUTH = os.path.expanduser("~/.codex/auth.json")
 CODEX_URL = "https://chatgpt.com/backend-api/codex/usage"
+CODEX_CREDITS_URL = "https://chatgpt.com/backend-api/codex/rate-limit-reset-credits"
 CODEX_CACHE = os.path.join(STATE_DIR, "codex.json")
 
 
@@ -169,6 +170,7 @@ def _codex_last_good(error):
     return {"ok": True, "plan": c.get("plan"), "windows": c["windows"],
             "credits": c.get("credits"), "reset_credits": c.get("reset_credits"),
             "reset_credits_applicable": c.get("reset_credits_applicable"),
+            "reset_credit_expires_at": c.get("reset_credit_expires_at"),
             "error": error, "reading_age": int(time.time()) - c["at"]}
 
 
@@ -182,12 +184,12 @@ def fetch_codex():
         a = json.load(open(CODEX_AUTH))["tokens"]
     except Exception:
         return _codex_last_good("no_credentials_file")
-    req = urllib.request.Request(CODEX_URL, headers={
-        "Authorization": "Bearer " + a["access_token"],
-        "chatgpt-account-id": a.get("account_id", ""),
-        "User-Agent": "codex-cli", "Accept": "application/json"})
+    headers = {"Authorization": "Bearer " + a["access_token"],
+               "chatgpt-account-id": a.get("account_id", ""),
+               "User-Agent": "codex-cli", "Accept": "application/json"}
     try:
-        d = json.loads(urllib.request.urlopen(req, timeout=20).read())
+        d = json.loads(urllib.request.urlopen(
+            urllib.request.Request(CODEX_URL, headers=headers), timeout=20).read())
     except urllib.error.HTTPError as e:
         return _codex_last_good("auth_expired" if e.code == 401 else "http_%s" % e.code)
     except Exception as e:
@@ -224,7 +226,19 @@ def fetch_codex():
            # state until a window is actually exhausted, which is why ChatGPT's own
            # screen shows nothing while one sits on the account.
            "reset_credits": _rlrc.get("available_count"),
-           "reset_credits_applicable": _rlrc.get("applicable_available_count")}
+           "reset_credits_applicable": _rlrc.get("applicable_available_count"),
+           "reset_credit_expires_at": None}
+    # A credit expires about 30 days after it is granted, so the soonest expiry is what
+    # decides whether banking one is still safe. Only asked for when one is held.
+    if _rlrc.get("available_count"):
+        try:
+            rc = json.loads(urllib.request.urlopen(
+                urllib.request.Request(CODEX_CREDITS_URL, headers=headers), timeout=20).read())
+            exp = sorted(c["expires_at"][:19] + "Z" for c in rc.get("credits") or []
+                         if c.get("status") == "available" and c.get("expires_at"))
+            out["reset_credit_expires_at"] = exp[0] if exp else None
+        except Exception:
+            pass
     try:
         json.dump({"at": int(time.time()), **out}, open(CODEX_CACHE, "w"))
     except Exception:
