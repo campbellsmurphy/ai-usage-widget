@@ -178,33 +178,29 @@ struct ContentView: View {
                               w.percent, w.resetsDate, expected: w.expectedResetsDate,
                               expectedWindows: w.expectedWindows)
                 }
-                // The two levers once a window is spent. The ChatGPT app gives credits
-                // their own section; a reset credit is only worth surfacing when held.
-                if let credits = codex?.credits {
-                    Text(credits.overageLimitReached == true
-                         ? "Credits: \(credits.text), overage limit reached"
-                         : "Credits: \(credits.text)")
-                        .font(.caption2)
-                        .foregroundStyle(UsageStyle.faint)
-                }
-                if let codex, let n = codex.resetCredits, n > 0 {
-                    // Only "redeem" is coloured: a credit that is usable but about to be
-                    // made pointless by the window rolling itself is a reason to wait.
-                    let noun = n == 1 ? "reset credit" : "reset credits"
+                // Resets and paid credits do the same job here (more Codex once a window is
+                // spent), so they share one line. Only "redeem" is coloured: a reset that the
+                // window rolling on its own is about to make pointless is a reason to wait.
+                if let codex {
+                    let n = codex.resetCredits ?? 0
+                    let paid = codex.credits.map { $0.unlimited == true || ($0.balance ?? 0) > 0 } ?? false
+                    let held = [n > 0 ? "\(n) \(n == 1 ? "reset" : "resets")" : nil,
+                                paid ? codex.credits!.text : nil].compactMap { $0 }
                     let hours = codex.resetCreditBackInHours.map { String(format: "%.0f h", $0) } ?? "soon"
-                    let advice: String = switch codex.resetCreditAdvice {
-                    case "redeem": "\(n) \(noun), worth redeeming: \(hours) left in a spent window"
-                    case "bank": "\(n) \(noun), bank it: window rolls itself in \(hours)"
-                    default: "\(n) \(noun) held, not applicable until a window is spent"
+                    let advice: String? = switch (n, codex.resetCreditAdvice) {
+                    case (0, _): nil
+                    case (_, "redeem"): "worth using: \(hours) left in a spent window"
+                    case (_, "bank"): "bank it: window rolls itself in \(hours)"
+                    default: "usable once a window is spent"
                     }
-                    Text(advice)
+                    let expiry = codex.resetCreditExpiresAt.flatMap(UsageDate.parse)
+                        .map { "expires \($0.formatted(.dateTime.day().month(.abbreviated)))" }
+                    let overage = codex.credits?.overageLimitReached == true ? "overage limit reached" : nil
+                    Text("Resets & credits: " + (held.isEmpty ? "none" :
+                         ([held.joined(separator: " + "), advice, expiry, overage].compactMap { $0 })
+                            .joined(separator: " · ")))
                         .font(.caption2)
                         .foregroundStyle(codex.resetCreditAdvice == "redeem" ? UsageStyle.codex : UsageStyle.faint)
-                    if let exp = codex.resetCreditExpiresAt.flatMap(UsageDate.parse) {
-                        Text("Expires \(exp.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()))")
-                            .font(.caption2)
-                            .foregroundStyle(UsageStyle.faint)
-                    }
                 }
                 if let codex, codex.frozen {
                     Text(codex.frozenNote)

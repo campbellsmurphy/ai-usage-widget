@@ -97,8 +97,10 @@ struct UsageWidgetView: View {
                             .font(.system(size: 9))
                             .foregroundStyle(UsageStyle.faint)
                     }
-                    if let n = codex?.resetCredits, n > 0 {
-                        Text("\(n) reset \(codex?.resetCreditAdvice == "redeem" ? "· redeem" : "banked")")
+                    // Resets and paid credits counted together: either one buys more Codex.
+                    let paid = codex?.credits.map { $0.unlimited == true || ($0.balance ?? 0) > 0 } ?? false
+                    if let n = codex.map({ ($0.resetCredits ?? 0) + (paid ? 1 : 0) }), n > 0 {
+                        Text("\(n) reset/credit \(codex?.resetCreditAdvice == "redeem" ? "· use" : "banked")")
                             .font(.system(size: 9, weight: codex?.resetCreditAdvice == "redeem" ? .bold : .regular))
                             .foregroundStyle(codex?.resetCreditAdvice == "redeem" ? UsageStyle.codex : UsageStyle.faint)
                     }
