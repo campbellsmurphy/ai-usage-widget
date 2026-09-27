@@ -274,6 +274,9 @@ PRICING = {
     # 1.25x for these too, so the same multipliers apply. gpt-5.5 is the standard rate
     # (its Fast-mode price is listed at exactly double).
     "gpt-6-astra":       (10.0, 50.0),
+    # gpt-6-sol and gpt-6-luna verified 2026-09-28 at the same page.
+    "gpt-6-sol":         (2.0, 10.0),
+    "gpt-6-luna":        (0.1, 0.5),
     "gpt-5.6-sol":       (4.0, 20.0),
     "gpt-5.6-terra":     (2.0, 12.0),
     "gpt-5.6-luna":      (0.2, 1.2),
