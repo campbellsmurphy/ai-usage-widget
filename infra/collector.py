@@ -207,13 +207,20 @@ def fetch_codex():
     headers = {"Authorization": "Bearer " + a["access_token"],
                "chatgpt-account-id": a.get("account_id", ""),
                "User-Agent": "codex-cli", "Accept": "application/json"}
-    try:
-        d = json.loads(urllib.request.urlopen(
-            urllib.request.Request(CODEX_URL, headers=headers), timeout=20).read())
-    except urllib.error.HTTPError as e:
-        return _codex_last_good("auth_expired" if e.code == 401 else "http_%s" % e.code)
-    except Exception as e:
-        return _codex_last_good(type(e).__name__)
+    # chatgpt.com's Cloudflare edge answers about 1 request in 10 with a 403 challenge page,
+    # in bursts that clear within seconds (measured 2026-10-09), so retry before freezing.
+    for attempt in range(4):
+        try:
+            d = json.loads(urllib.request.urlopen(
+                urllib.request.Request(CODEX_URL, headers=headers), timeout=20).read())
+            break
+        except urllib.error.HTTPError as e:
+            if e.code == 403 and attempt < 3:
+                time.sleep(5)
+                continue
+            return _codex_last_good("auth_expired" if e.code == 401 else "http_%s" % e.code)
+        except Exception as e:
+            return _codex_last_good(type(e).__name__)
 
     rl = d.get("rate_limit") or {}
     windows = []
