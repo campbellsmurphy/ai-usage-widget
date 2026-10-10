@@ -166,9 +166,12 @@ def get_access_token(force=False):
     ea = o.get("expiresAt") or 0
     if not force and o.get("accessToken") and ea > now + 60000:
         return o["accessToken"], None
-    rt = o.get("refreshToken")
-    if not rt:
-        return o.get("accessToken"), "no_refresh_token"
+    # Read-only from 2026-10-10. Refreshing here rotated the refresh token out from under
+    # the long-running `claude remote-control` on this box; whichever side refreshed second
+    # got invalid_grant and Claude Code signed itself out. Claude Code owns the token now.
+    if not o.get("refreshToken"):
+        return None, "signed_out"
+    return None, "access_token_expired"
     try:
         d = oauth_refresh(rt)
     except urllib.error.HTTPError as e:
