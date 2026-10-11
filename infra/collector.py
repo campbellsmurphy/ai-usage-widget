@@ -173,8 +173,8 @@ def fetch_antigravity():
 
 
 CODEX_AUTH = os.path.expanduser("~/.codex/auth.json")
-# The CLI moved to wham/usage; codex/usage has answered every call with a 403 page since
-# about 2026-10-11 02:00. Same payload on both, so try them in order.
+# wham/usage is the CLI's current path and Cloudflare passes even Apple python's LibreSSL
+# there; codex/usage 403s LibreSSL on every call. Same payload on both, so try them in order.
 CODEX_URLS = ("https://chatgpt.com/backend-api/wham/usage",
               "https://chatgpt.com/backend-api/codex/usage")
 CODEX_CREDITS_URL = "https://chatgpt.com/backend-api/codex/rate-limit-reset-credits"

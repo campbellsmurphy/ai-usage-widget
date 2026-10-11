@@ -11,8 +11,9 @@
 		<!-- Homebrew python first: chatgpt.com's Cloudflare 403s Apple python's LibreSSL
 		     TLS fingerprint (and system curl's), so the Codex fetch needs an OpenSSL
 		     build. Later entries keep the rest of the collector alive if brew python
-		     ever disappears: only the Codex row freezes, and the widget says so. -->
-		<string>for p in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do [ -x "$p" ] &amp;&amp; exec "$p" __HOME__/.ai-usage-collector/collector.py; done</string>
+		     ever disappears: only the Codex row freezes, and the widget says so. The opt
+		     path survives a minor-version upgrade, which drops bin/python3 (2026-10-11). -->
+		<string>for p in /opt/homebrew/opt/python@3/libexec/bin/python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do [ -x "$p" ] &amp;&amp; exec "$p" __HOME__/.ai-usage-collector/collector.py; done</string>
 	</array>
 	<key>StartInterval</key>
 	<integer>1200</integer>
