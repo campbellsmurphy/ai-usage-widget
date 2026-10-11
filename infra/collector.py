@@ -168,7 +168,10 @@ def fetch_antigravity():
 
 
 CODEX_AUTH = os.path.expanduser("~/.codex/auth.json")
-CODEX_URL = "https://chatgpt.com/backend-api/codex/usage"
+# The CLI moved to wham/usage; codex/usage has answered every call with a 403 page since
+# about 2026-10-11 02:00. Same payload on both, so try them in order.
+CODEX_URLS = ("https://chatgpt.com/backend-api/wham/usage",
+              "https://chatgpt.com/backend-api/codex/usage")
 CODEX_CREDITS_URL = "https://chatgpt.com/backend-api/codex/rate-limit-reset-credits"
 CODEX_CACHE = os.path.join(STATE_DIR, "codex.json")
 
@@ -211,8 +214,8 @@ def fetch_codex():
     # in bursts that clear within seconds (measured 2026-10-09), so retry before freezing.
     for attempt in range(4):
         try:
-            d = json.loads(urllib.request.urlopen(
-                urllib.request.Request(CODEX_URL, headers=headers), timeout=20).read())
+            d = json.loads(urllib.request.urlopen(urllib.request.Request(
+                CODEX_URLS[attempt % 2], headers=headers), timeout=20).read())
             break
         except urllib.error.HTTPError as e:
             if e.code == 403 and attempt < 3:
