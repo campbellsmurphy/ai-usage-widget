@@ -55,6 +55,8 @@ CONTINUITY     = 3600  # a row absent longer than this was not watched, so nothi
 EXPECT_MARGIN  = 3600  # only worth saying when the estimate is meaningfully before the advertised time
 REDEEM_MIN_H   = 24    # a Codex reset credit is only worth spending with at least this long left to run
 CREDIT_WARN_H  = 72    # push once when a held credit is this close to expiring
+FROZEN_STATE   = os.path.join(BASE, "frozen-watch.json")
+FROZEN_ALERT_H = 2     # a row frozen this long is a real outage, not a Cloudflare burst
 
 _cache = {"ts": 0.0, "data": None}
 # Pushed by the collector, which is the only machine that can reach Claude's token (when
@@ -505,6 +507,45 @@ def _advise_reset_credit(out, st, now):
     return {"count": n, "advice": advice, "warned_expiry": warned}
 
 
+def _watch_frozen(out):
+    """Push once when a provider row has been frozen (last-good replay, error, or stale
+    collector) for FROZEN_ALERT_H, and once when it recovers. The widget only shows the
+    freeze when you look at it; Codex sat frozen for 9 h unnoticed on 2026-10-11.
+    """
+    now = time.time()
+    try:
+        st = json.load(open(FROZEN_STATE))
+    except Exception:
+        st = {}
+    for p in ("claude", "grok", "codex", "antigravity"):
+        row = out.get(p)
+        if row is None or row.get("error") == "not_configured":
+            continue
+        stale = out.get(p + "_stale") or (p == "claude" and out.get("stale"))
+        reason = ("collector silent" if stale and not row.get("error")
+                  else row.get("error") if (stale or row.get("error") or not row.get("ok"))
+                  else None)
+        prev = st.get(p) or {}
+        if reason:
+            since = prev.get("since") or now
+            alerted = prev.get("alerted", False)
+            if not alerted and now - since >= FROZEN_ALERT_H * 3600:
+                alerted = _ntfy("%s usage frozen" % p.capitalize(),
+                                "No fresh %s reading for %.1f h (%s). The widget is showing "
+                                "the last good value." % (p, (now - since) / 3600, reason))
+            st[p] = {"since": since, "reason": reason, "alerted": alerted}
+        else:
+            if prev.get("alerted"):
+                _ntfy("%s usage recovered" % p.capitalize(),
+                      "Fresh %s reading again after %.1f h frozen."
+                      % (p, (now - prev["since"]) / 3600))
+            st.pop(p, None)
+    try:
+        json.dump(st, open(FROZEN_STATE, "w"))
+    except Exception:
+        pass
+
+
 def get_usage(force=False):
     with _lock:
         now = time.time()
@@ -574,6 +615,7 @@ def get_usage(force=False):
             if not push_fresh:
                 out["antigravity_stale"] = True
         _watch_resets(out)
+        _watch_frozen(out)
         _cache["ts"] = now
         _cache["data"] = out
         try:
