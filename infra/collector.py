@@ -19,7 +19,8 @@ report it and let Claude Code refresh on its own, rather than racing it for a wr
 
 Config lives in ~/.ai-usage-collector/config.json:
   {"aggregator": "http://100.x.x.x:8756", "token": "shared secret",
-   "providers": ["claude", "antigravity", "codex", "tokens"], "currency": "AUD"}
+   "providers": ["claude", "antigravity", "codex", "tokens"], "currency": "AUD",
+   "ntfy_url": "https://ntfy.sh/your-topic"}   # optional, aggregator-down alert
 Leave a provider out of the list and its key is never pushed, so the phone shows no
 row for it rather than an error.
 """
@@ -36,6 +37,10 @@ TOKEN = CFG.get("token", "REPLACE_ME")
 PROVIDERS = CFG.get("providers", ["claude", "antigravity", "codex", "tokens", "codex_tokens",
                                   "grok_tokens", "agy_tokens"])
 CURRENCY = CFG.get("currency", "USD")
+NTFY_URL = CFG.get("ntfy_url")
+AGG_WATCH = os.path.join(STATE_DIR, "aggregator-watch.json")
+AGG_ALERT_H = 2      # the aggregator watches the collector the same way, so match its threshold
+AGG_GAP = 2700       # a longer gap between runs is the M5 asleep, not a continuous outage
 CREDS = os.path.expanduser("~/.claude/.credentials.json")
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 
@@ -951,6 +956,45 @@ def fetch_agy_tokens():
     return data
 
 
+def _ntfy(title, msg):
+    if not NTFY_URL:
+        return False
+    try:
+        urllib.request.urlopen(urllib.request.Request(
+            NTFY_URL, data=msg.encode(), headers={"Title": title, "Tags": "warning"}), timeout=15)
+        return True
+    except Exception:
+        return False
+
+
+def _watch_aggregator(error):
+    """The aggregator alerts on everything except its own death, so the collector does that:
+    one push after AGG_ALERT_H of failed pushes, one on recovery."""
+    now = time.time()
+    try:
+        st = json.load(open(AGG_WATCH))
+    except Exception:
+        st = {}
+    if error:
+        since = st.get("since") if now - st.get("last", 0) < AGG_GAP else None
+        since = since or now
+        alerted = st.get("alerted", False) and since == st.get("since")
+        if not alerted and now - since >= AGG_ALERT_H * 3600:
+            alerted = _ntfy("AI usage aggregator down",
+                            "The mini aggregator has refused every push for %.1f h (%s). "
+                            "The widget is frozen." % ((now - since) / 3600, error))
+        st = {"since": since, "last": now, "alerted": alerted, "error": error}
+    else:
+        if st.get("alerted"):
+            _ntfy("AI usage aggregator back",
+                  "Pushes accepted again after %.1f h." % ((now - st["since"]) / 3600))
+        st = {"last": now}
+    try:
+        json.dump(st, open(AGG_WATCH, "w"))
+    except Exception:
+        pass
+
+
 def main():
     fetchers = {"claude": fetch_claude, "antigravity": fetch_antigravity,
                 "codex": fetch_codex, "tokens": fetch_tokens,
@@ -971,9 +1015,11 @@ def main():
                                  headers={"Content-Type": "application/json"})
     try:
         print(urllib.request.urlopen(req, timeout=20).read().decode()[:200])
+        _watch_aggregator(None)
     except Exception as e:
         print("push failed:", type(e).__name__, e)
         print(json.dumps(payload)[:400])
+        _watch_aggregator(type(e).__name__)
 
 
 if __name__ == "__main__":
