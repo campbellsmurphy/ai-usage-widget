@@ -85,6 +85,7 @@ struct ContentView: View {
                     if store.payload?.claude != nil { claudeSection }
                     if store.payload?.grok != nil { grokSection }
                     if store.payload?.codex != nil { codexSection }
+                    if store.payload?.muse != nil { museSection }
                     if store.payload?.antigravity != nil { antigravitySection }
                     historyLink
                     widgetPreviewSection
@@ -167,6 +168,33 @@ struct ContentView: View {
         if let p = grok.percent { parts.append("\(Int((100 - p).rounded()))% left") }
         if let text = UsageStyle.resetText(grok.resetsDate) { parts.append(text) }
         return parts.isEmpty ? "Weekly SuperGrok limit" : parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder private var museSection: some View {
+        let muse = store.payload?.muse
+        section(muse?.plan.map { "Muse Code (\($0))" } ?? "Muse Code", accent: UsageStyle.muse) {
+            if muse?.ok == true, let windows = muse?.windows, !windows.isEmpty {
+                ForEach(windows) { w in
+                    bucketRow(w.label == "weekly" ? "Weekly limit" : "5-hour limit",
+                              w.percent, w.resetsDate, expected: nil, expectedWindows: nil)
+                }
+                if let muse, muse.frozen {
+                    Text(muse.error == "keychain_prompt" || muse.error == "keychain_denied"
+                         ? "Muse login needs Keychain approval on the collector (Always Allow)."
+                         : "Muse unreachable (\(muse.error ?? "unknown")), frozen \(muse.readingAge.map(UsageStyle.ageText) ?? "some time") ago.")
+                        .font(.caption2)
+                        .foregroundStyle(UsageStyle.color(for: 95))
+                } else if store.payload?.museStale == true {
+                    Text("Collector offline, these may be stale.")
+                        .font(.caption2)
+                        .foregroundStyle(UsageStyle.color(for: 75))
+                }
+            } else {
+                Text("Muse unavailable (\(muse?.error ?? "unknown"))")
+                    .font(.callout)
+                    .foregroundStyle(UsageStyle.faint)
+            }
+        }
     }
 
     @ViewBuilder private var codexSection: some View {

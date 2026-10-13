@@ -65,7 +65,7 @@ _cache = {"ts": 0.0, "data": None}
 PUSH_MAX_AGE = 2700
 PUSH_STATE = os.path.join(BASE, "pushed.json")
 _pushed = {"at": 0, "claude": None, "antigravity": None, "tokens": None, "codex": None,
-           "codex_tokens": None, "grok_tokens": None, "agy_tokens": None}
+           "codex_tokens": None, "grok_tokens": None, "agy_tokens": None, "muse": None}
 try:
     # Survive a restart: otherwise the pushed rows vanish until the collector's next run.
     _pushed.update(json.load(open(PUSH_STATE)))
@@ -358,6 +358,11 @@ def _flatten_windows(out):
         for win in cx.get("windows") or []:
             w["codex." + win["label"]] = (win.get("percent"), _iso_epoch(win.get("resets_at")),
                                           "Codex %s" % win["label"], win, "")
+    mu = out.get("muse") or {}
+    if mu.get("ok") and not mu.get("error") and not out.get("muse_stale"):
+        for win in mu.get("windows") or []:
+            w["muse." + win["label"]] = (win.get("percent"), _iso_epoch(win.get("resets_at")),
+                                         "Muse %s" % win["label"], win, "")
     ag = out.get("antigravity") or {}
     if ag.get("ok") and not ag.get("error") and not out.get("antigravity_stale"):
         for grp in ag.get("groups") or []:
@@ -517,7 +522,7 @@ def _watch_frozen(out):
         st = json.load(open(FROZEN_STATE))
     except Exception:
         st = {}
-    for p in ("claude", "grok", "codex", "antigravity"):
+    for p in ("claude", "grok", "codex", "antigravity", "muse"):
         row = out.get(p)
         if row is None or row.get("error") == "not_configured":
             continue
@@ -609,6 +614,11 @@ def get_usage(force=False):
             if not push_fresh:
                 out["codex_stale"] = True
 
+        if _pushed.get("muse"):
+            out["muse"] = _pushed["muse"]
+            if not push_fresh:
+                out["muse_stale"] = True
+
         if _pushed["antigravity"]:
             out["antigravity"] = _pushed["antigravity"]
             out["antigravity_age"] = int(push_age)
@@ -648,6 +658,7 @@ class H(BaseHTTPRequestHandler):
             _pushed["codex_tokens"] = d.get("codex_tokens")
             _pushed["grok_tokens"] = d.get("grok_tokens")
             _pushed["agy_tokens"] = d.get("agy_tokens")
+            _pushed["muse"] = d.get("muse")
             _cache["ts"] = 0.0          # force the next read to fold in what just arrived
             try:
                 json.dump(_pushed, open(PUSH_STATE, "w"))

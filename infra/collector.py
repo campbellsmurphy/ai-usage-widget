@@ -5,6 +5,8 @@ Sources that only the collector machine can reach:
   * Claude   - this machine's Claude Code stays logged in, so its access token works.
   * Antigravity - its quota RPC is served by a local language_server on loopback.
   * Codex    - the ChatGPT plan quota, read with the Codex CLI's stored access token.
+  * Muse     - Muse Code (Meta) 5-hour and weekly windows, from the Muse CLI's login
+    handshake, with dev.meta.ai as the fallback while no 5-hour window is active.
   * tokens   - Claude Code token history from the local session logs, with a costing.
   * codex_tokens - Codex CLI token history from its local session rollouts, priced at
     OpenAI's published list rates.
@@ -401,6 +403,162 @@ def price(bymodel):
             "fx_as_of": as_of,
             "fx_stale": stale,
             "basis": basis}
+
+
+MUSE_AUTH = os.path.expanduser("~/.config/muse/auth.json")
+MUSE_KEY_URL = "https://api.meta.ai/muse-code/key"
+MUSE_WEB = "https://dev.meta.ai"
+MUSE_COOKIE = os.path.join(STATE_DIR, "muse-cookie.txt")   # dev.meta.ai session, chmod 600
+MUSE_CACHE = os.path.join(STATE_DIR, "muse.json")
+
+
+def _muse_token():
+    """The Muse CLI's device-code token: inline in auth.json if present, else its Keychain item.
+
+    The Keychain item belongs to the Muse CLI, so the first read raises a macOS prompt that
+    needs Always Allow once. A pending prompt would block `security`, hence the timeout.
+    """
+    try:
+        t = ((json.load(open(MUSE_AUTH)).get("providers") or {}).get("meta") or {}).get("access_token")
+        if t:
+            return t, None
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(["security", "find-generic-password", "-s", "ai.meta.dev.credentials",
+                            "-a", "meta", "-w"], capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return None, "keychain_prompt"
+    if r.returncode:
+        return None, "keychain_denied" if r.returncode == 128 else "no_credentials"
+    raw = r.stdout.strip()
+
+    def find(o):
+        if isinstance(o, str):
+            return o if o.startswith("dca:") else None
+        for v in (o.values() if isinstance(o, dict) else o if isinstance(o, list) else ()):
+            f = find(v)
+            if f:
+                return f
+        return None
+    try:
+        tok = find(json.loads(raw))
+    except ValueError:
+        tok = find(raw)
+    return (tok, None) if tok else (None, "no_device_token")
+
+
+def _muse_iso(v):
+    """Reset stamps arrive as epoch seconds, epoch milliseconds or ISO text."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(v / 1000 if v > 1e11 else v))
+    return str(v)
+
+
+def _muse_web(tier):
+    """dev.meta.ai team quota, for when the login omits usage because no 5-hour window is active.
+
+    Uses the browser session cookie Campbell pastes into muse-cookie.txt. The team comes from
+    config `muse_team_id`, else the only team the session can see.
+    """
+    try:
+        cookie = open(MUSE_COOKIE).read().strip()
+    except Exception:
+        return None, "no_web_cookie"
+    if "=" not in cookie:
+        cookie = "llama_dev_sess=" + cookie
+    headers = {"Cookie": cookie, "Accept": "application/json", "User-Agent": "ai-usage-collector"}
+
+    def get(path):
+        return json.loads(urllib.request.urlopen(urllib.request.Request(
+            MUSE_WEB + path, headers=headers), timeout=15).read())
+    try:
+        team = CFG.get("muse_team_id")
+        if not team:
+            teams = get("/api/portal/teams")
+            if isinstance(teams, dict):
+                teams = teams.get("teams") or teams.get("data") or []
+            if len(teams) != 1:
+                return None, "web_team_ambiguous"
+            team = teams[0].get("id") or teams[0].get("team_id")
+        q = get("/api/portal/teams/%s/subscription-quota" % team)
+    except urllib.error.HTTPError as e:
+        return None, "web_auth_expired" if e.code in (401, 403) else "web_http_%s" % e.code
+    except Exception as e:
+        return None, "web_" + type(e).__name__
+    if tier and q.get("tier") and q["tier"] != tier:
+        return None, "web_tier_mismatch"
+
+    def pct(used, limit):
+        try:
+            return round(100.0 * float(used) / float(limit), 1)
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+    weekly = pct(q.get("weekly_weighted_used"), q.get("weekly_weighted_limit"))
+    if weekly is None:
+        return None, "web_bad_shape"
+    reset = _muse_iso(q.get("window_resets_at"))
+    active = reset is not None and reset > time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return [{"label": "5-hour", "percent": pct(q.get("window_weighted_used"),
+                                               q.get("window_weighted_limit")) if active else 0,
+             "resets_at": reset if active else None},
+            {"label": "weekly", "percent": weekly,
+             "resets_at": _muse_iso(q.get("weekly_resets_at"))}], None
+
+
+def _muse_last_good(error):
+    """Same hazard as Antigravity and Codex: an empty row looks exactly like 0% used."""
+    try:
+        c = json.load(open(MUSE_CACHE))
+    except Exception:
+        return {"error": error}
+    return {"ok": True, "plan": c.get("plan"), "source": c.get("source"),
+            "windows": c["windows"], "error": error, "reading_age": int(time.time()) - c["at"]}
+
+
+def fetch_muse():
+    """Muse Code subscription windows from the CLI's login handshake, which costs no quota.
+
+    The handshake also mints an inference key and returns card details; both are discarded.
+    Meta omits the usage block while no 5-hour window is active, so dev.meta.ai fills that gap.
+    """
+    tok, err = _muse_token()
+    if not tok:
+        return _muse_last_good(err)
+    try:
+        d = json.loads(urllib.request.urlopen(urllib.request.Request(
+            MUSE_KEY_URL, data=b"{}", method="POST",
+            headers={"Authorization": "Bearer " + tok, "x-api-version": "1.0.0",
+                     "Content-Type": "application/json", "User-Agent": "ai-usage-collector"}),
+            timeout=20).read())
+    except urllib.error.HTTPError as e:
+        return _muse_last_good("auth_expired" if e.code == 401 else "http_%s" % e.code)
+    except Exception as e:
+        return _muse_last_good(type(e).__name__)
+    if d.get("is_subs_active") is not True:
+        return {"error": "no_subscription"}
+    plan = d.get("subs_tier_name")
+    u = d.get("subs_usage")
+    if u:
+        w, wk = u.get("window") or {}, u.get("weekly") or {}
+        windows = [{"label": "5-hour", "percent": w.get("used_percent"),
+                    "resets_at": _muse_iso(w.get("resets_at"))},
+                   {"label": "weekly", "percent": wk.get("used_percent"),
+                    "resets_at": _muse_iso(wk.get("resets_at"))}]
+        source = "login"
+    else:
+        windows, err = _muse_web(plan)
+        if not windows:
+            return _muse_last_good("idle_" + err)
+        source = "web"
+    out = {"ok": True, "plan": plan, "source": source, "windows": windows}
+    try:
+        json.dump({"at": int(time.time()), **out}, open(MUSE_CACHE, "w"))
+    except Exception:
+        pass
+    return out
 
 
 TOKEN_CACHE = os.path.join(STATE_DIR, "tokens.json")

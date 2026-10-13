@@ -106,6 +106,11 @@ struct UsageWidgetView: View {
                     }
                     Spacer(minLength: 7)
                 }
+                if hasMuse {
+                    providerRow(muse?.headline?.label == "weekly" ? "MUSE wk" : "MUSE",
+                                muse?.headline?.percent, UsageStyle.muse)
+                    Spacer(minLength: 7)
+                }
                 if hasAntigravity {
                     header("AGY", color: UsageStyle.gemini)
                     Spacer(minLength: 3)
@@ -168,6 +173,12 @@ struct UsageWidgetView: View {
     private var hasGrok: Bool { entry.payload?.grok != nil }
     private var hasCodex: Bool { entry.payload?.codex != nil }
     private var hasAntigravity: Bool { entry.payload?.antigravity != nil }
+    private var hasMuse: Bool { entry.payload?.muse != nil }
+
+    private var muse: CodexUsage? {
+        guard let muse = entry.payload?.muse, muse.ok == true else { return nil }
+        return muse
+    }
     private var hasAny: Bool { hasClaude || hasGrok || hasCodex || hasAntigravity }
 
     private var headlineRows: [(String, Double?)] {

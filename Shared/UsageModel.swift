@@ -20,6 +20,8 @@ struct UsagePayload: Decodable {
     var grok: GrokUsage?
     var gemini: GeminiUsage?
     var codex: CodexUsage?
+    /// Muse Code (Meta). Same shape as Codex: a plan plus labelled windows.
+    var muse: CodexUsage?
     var antigravity: AntigravityUsage?
     var tokens: TokenUsage?
     var codexTokens: TokenUsage?
@@ -38,6 +40,7 @@ struct UsagePayload: Decodable {
     var claudeSource: String?
     var antigravityStale: Bool?
     var codexStale: Bool?
+    var museStale: Bool?
     /// Set locally and never decoded: this reading came off the phone's own disk cache
     /// because no route to the aggregator answered. Distinct from `stale`, which the
     /// aggregator sets when *it* is serving its last good reading. Conflating the two
@@ -54,6 +57,8 @@ struct UsagePayload: Decodable {
         case claudeSource = "claude_source"
         case antigravityStale = "antigravity_stale"
         case codexStale = "codex_stale"
+        case muse
+        case museStale = "muse_stale"
     }
 
     var updatedDate: Date? { updated.map { Date(timeIntervalSince1970: $0) } }
@@ -73,6 +78,9 @@ struct UsagePayload: Decodable {
         if grok?.ok == true { check("Grok weekly", grok?.percent) }
         if codex?.ok == true {
             for w in codex?.windows ?? [] { check("Codex \(w.label ?? "limit")", w.percent) }
+        }
+        if muse?.ok == true {
+            for w in muse?.windows ?? [] { check("Muse \(w.label ?? "limit")", w.percent) }
         }
         if antigravity?.ok == true {
             for g in antigravity?.groups ?? [] {
@@ -476,6 +484,7 @@ enum UsageStyle {
     static let claude = Color(red: 0.851, green: 0.467, blue: 0.341)
     static let gemini = Color(red: 0.604, green: 0.659, blue: 0.780)
     static let codex = Color(red: 0.427, green: 0.800, blue: 0.667)
+    static let muse = Color(red: 0.353, green: 0.549, blue: 1.0)
     static let label = Color(white: 0.81)
     static let faint = Color(white: 0.44)
 
