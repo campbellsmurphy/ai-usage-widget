@@ -1157,7 +1157,7 @@ def main():
     fetchers = {"claude": fetch_claude, "antigravity": fetch_antigravity,
                 "codex": fetch_codex, "tokens": fetch_tokens,
                 "codex_tokens": fetch_codex_tokens, "grok_tokens": fetch_grok_tokens,
-                "agy_tokens": fetch_agy_tokens}
+                "agy_tokens": fetch_agy_tokens, "muse": fetch_muse}
     payload = {name: fetchers[name]() for name in PROVIDERS if name in fetchers}
     payload["at"] = int(time.time())
     # 2026-09-15: local copy of the Claude plan percentages (no credentials) for the family-tree
