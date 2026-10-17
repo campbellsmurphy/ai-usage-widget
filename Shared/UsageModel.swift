@@ -170,7 +170,7 @@ struct CodexUsage: Decodable {
     var ok: Bool?
     var plan: String?
     /// Muse only: "login" (the CLI plan itself) or "web" (the dev.meta.ai team quota,
-    /// read while the 5-hour window is idle; not provably the same counter).
+    /// read while the 5-hour window is idle; matched the login figures on 2026-10-18).
     var source: String?
     var windows: [Window]?
     var credits: Credits?

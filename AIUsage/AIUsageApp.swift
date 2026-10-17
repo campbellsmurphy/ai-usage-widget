@@ -179,7 +179,7 @@ struct ContentView: View {
                               w.percent, w.resetsDate, expected: nil, expectedWindows: nil)
                 }
                 if muse?.source == "web" {
-                    Text("From the dev.meta.ai team quota while no 5-hour window is active. May not match the CLI plan.")
+                    Text("From dev.meta.ai while no 5-hour window is active (same counter as the CLI, checked 18 Oct).")
                         .font(.caption2)
                         .foregroundStyle(UsageStyle.faint)
                 }
