@@ -484,6 +484,7 @@ def _muse_web(tier):
                 return None, "web_team_ambiguous"
             team = teams[0].get("id") or teams[0].get("team_id")
         q = get("/api/portal/teams/%s/subscription-quota" % team)
+        q = q.get("subscription_quota") or q
     except urllib.error.HTTPError as e:
         return None, "web_auth_expired" if e.code in (401, 403) else "web_http_%s" % e.code
     except Exception as e:

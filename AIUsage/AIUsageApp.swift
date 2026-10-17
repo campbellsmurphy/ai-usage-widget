@@ -178,6 +178,11 @@ struct ContentView: View {
                     bucketRow(w.label == "weekly" ? "Weekly limit" : "5-hour limit",
                               w.percent, w.resetsDate, expected: nil, expectedWindows: nil)
                 }
+                if muse?.source == "web" {
+                    Text("From the dev.meta.ai team quota while no 5-hour window is active. May not match the CLI plan.")
+                        .font(.caption2)
+                        .foregroundStyle(UsageStyle.faint)
+                }
                 if let muse, muse.frozen {
                     Text(muse.error == "keychain_prompt" || muse.error == "keychain_denied"
                          ? "Muse login needs Keychain approval on the collector (Always Allow)."

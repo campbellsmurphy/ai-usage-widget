@@ -169,6 +169,9 @@ struct GrokUsage: Decodable {
 struct CodexUsage: Decodable {
     var ok: Bool?
     var plan: String?
+    /// Muse only: "login" (the CLI plan itself) or "web" (the dev.meta.ai team quota,
+    /// read while the 5-hour window is idle; not provably the same counter).
+    var source: String?
     var windows: [Window]?
     var credits: Credits?
     /// Free early resets the plan has banked; spending one refills an exhausted window.
@@ -188,7 +191,7 @@ struct CodexUsage: Decodable {
     var readingAge: Int?
 
     enum CodingKeys: String, CodingKey {
-        case ok, plan, windows, credits, error
+        case ok, plan, windows, credits, error, source
         case resetCredits = "reset_credits"
         case resetCreditsApplicable = "reset_credits_applicable"
         case resetCreditExpiresAt = "reset_credit_expires_at"
