@@ -255,7 +255,8 @@ struct ContentView: View {
     @ViewBuilder private var antigravitySection: some View {
         let ag = store.payload?.antigravity
         section("AGY", accent: UsageStyle.gemini) {
-            Text("Percentages here are USED. Antigravity's own Models screen shows the "
+            Text("Antigravity's own quota, separate from the Claude plan and Codex above. "
+                 + "Percentages here are USED. Antigravity's own Models screen shows the "
                  + "inverse (what is left), so 0% used there reads as 100%.")
                 .font(.caption2)
                 .foregroundStyle(UsageStyle.faint)
@@ -263,16 +264,16 @@ struct ContentView: View {
             if ag?.ok == true {
                 let cgWeekly = ag?.thirdParty?.weeklyUsed
                 let cgWeeklyMaxed = (cgWeekly ?? 0) >= 100
-                bucketRow("Claude + GPT, weekly", cgWeekly, ag?.thirdParty?.weeklyResetsDate)
+                bucketRow("AGY Claude + GPT pool, weekly", cgWeekly, ag?.thirdParty?.weeklyResetsDate)
                 // Once the weekly is exhausted the 5-hour bucket can't be spent, so its
                 // 0%-used reading is meaningless, so show n/a rather than a fresh-looking bucket.
-                bucketRow("Claude + GPT, 5-hour",
+                bucketRow("AGY Claude + GPT pool, 5-hour",
                           cgWeeklyMaxed ? nil : ag?.thirdParty?.fiveHourUsed,
                           nil,
                           nilNote: cgWeeklyMaxed ? "weekly maxed" : nil)
                 Divider().overlay(UsageStyle.faint.opacity(0.3))
-                bucketRow("Gemini models, weekly", ag?.gemini?.weeklyUsed, ag?.gemini?.weeklyResetsDate)
-                bucketRow("Gemini models, 5-hour", ag?.gemini?.fiveHourUsed, nil)
+                bucketRow("AGY Gemini pool, weekly", ag?.gemini?.weeklyUsed, ag?.gemini?.weeklyResetsDate)
+                bucketRow("AGY Gemini pool, 5-hour", ag?.gemini?.fiveHourUsed, nil)
                 if let ag, ag.frozen {
                     Text(ag.frozenNote)
                         .font(.caption2)

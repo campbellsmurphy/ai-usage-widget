@@ -84,7 +84,9 @@ struct UsagePayload: Decodable {
         }
         if antigravity?.ok == true {
             for g in antigravity?.groups ?? [] {
-                let n = g.name ?? "AGY"
+                // Prefixed so "Claude and GPT models" reads as Antigravity's own pool,
+                // not the Claude plan or Codex, which have their own rows.
+                let n = "AGY (\(g.name ?? "unnamed pool"))"
                 check("\(n) weekly", g.weeklyUsed)
                 check("\(n) 5-hour", g.fiveHourUsed)
             }
