@@ -3,9 +3,9 @@ import SwiftUI
 /// The rendered widget content. Lives in Shared so the app can show a true-to-life
 /// preview at each size without duplicating layout code.
 ///
-/// Every size leads with the tightest limit: the one projected to be fullest at its
-/// reset. Limits already at 100% drop to the badge, since nothing can be done about them
-/// but wait.
+/// Claude's weekly plan is always the big number. The limits Campbell watches closely
+/// (Fable, Argon) get bars of their own; everything else shares a compact line, so a
+/// side plan like Muse never takes the space however full it is.
 struct UsageWidgetView: View {
     var entry: UsageEntry
     var family: UsageWidgetFamily
@@ -19,9 +19,9 @@ struct UsageWidgetView: View {
     }
 
     private var meters: [Meter] { entry.payload?.meters ?? [] }
-    private var live: [Meter] { meters.filter { !$0.atLimit } }
-    private var hero: Meter? { live.first }
-    private var rest: [Meter] { Array(live.dropFirst()) }
+    private var hero: Meter? { meters.first }
+    private var watched: [Meter] { meters.dropFirst().filter { $0.tier <= 2 } }
+    private var others: [Meter] { meters.dropFirst().filter { $0.tier > 2 } }
 
     // MARK: Sizes
 
@@ -30,19 +30,9 @@ struct UsageWidgetView: View {
             if let hero {
                 heroBlock(hero, size: 30)
                 Spacer(minLength: 6)
-                // Idle limits share one line: a row of empty bars says nothing.
-                let shown = Array(rest.filter { ($0.percent ?? 0) > 0 }.prefix(4))
-                ForEach(shown) { meterRow($0) }
-                let others = rest.filter { m in !shown.contains { $0.id == m.id } }
-                if !others.isEmpty {
-                    Text(others.map { "\($0.name) \(UsageStyle.percentText($0.percent))" }
-                             .joined(separator: " · "))
-                        .font(.system(size: 9))
-                        .foregroundStyle(UsageStyle.faint)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                        .padding(.top, 1)
-                }
+                ForEach(watched) { meterRow($0) }
+                compactLine(others)
+                    .padding(.top, 2)
             } else {
                 unavailable
             }
@@ -65,17 +55,18 @@ struct UsageWidgetView: View {
             }
             .frame(width: 120, alignment: .leading)
 
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(rest) { m in
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(watched) { m in
                     VStack(alignment: .leading, spacing: 0) {
                         meterRow(m)
-                        if m.runsOut() != nil, let s = m.status() {
+                        if m.atLimit || m.runsOut() != nil, let s = m.status() {
                             Text(s)
                                 .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(UsageStyle.color(for: 75))
+                                .foregroundStyle(UsageStyle.color(for: m.atLimit ? 100 : 75))
                         }
                     }
                 }
+                ForEach(others) { meterRow($0) }
                 Spacer(minLength: 0)
             }
         }
@@ -87,7 +78,7 @@ struct UsageWidgetView: View {
                 Text(hero.name.uppercased()).font(.system(size: 10, weight: .heavy))
                 Text(UsageStyle.percentText(hero.percent) + (hero.status().map { "  ·  \($0)" } ?? ""))
                     .font(.system(size: 13, weight: .semibold))
-                Text(rest.prefix(3).map { "\($0.name) \(UsageStyle.percentText($0.percent))" }
+                Text(watched.prefix(3).map { "\($0.name) \(UsageStyle.percentText($0.percent))" }
                          .joined(separator: "  "))
                     .font(.system(size: 11))
                     .lineLimit(1)
@@ -141,6 +132,22 @@ struct UsageWidgetView: View {
         .frame(height: 15)
     }
 
+    /// Side plans as text. A percentage only takes colour once it is worth a look.
+    private func compactLine(_ ms: [Meter]) -> some View {
+        var a = AttributedString()
+        for (i, m) in ms.enumerated() {
+            var name = AttributedString((i == 0 ? "" : " · ") + m.name + " ")
+            name.foregroundColor = UsageStyle.faint
+            var pct = AttributedString(UsageStyle.percentText(m.percent))
+            pct.foregroundColor = (m.percent ?? 0) >= 70 ? UsageStyle.color(for: m.percent) : UsageStyle.faint
+            a += name + pct
+        }
+        return Text(a)
+            .font(.system(size: 9))
+            .lineLimit(2)
+            .minimumScaleFactor(0.8)
+    }
+
     /// The banked extras that change what to do next: a Claude reset or a Codex credit.
     @ViewBuilder private var extras: some View {
         if let n = entry.payload?.claude?.limitReset?.left, n > 0 {
@@ -175,27 +182,14 @@ struct UsageWidgetView: View {
     /// A number on screen is not proof the number is current, so say when it is not.
     /// "offline" means this phone could not reach the aggregator and is showing its own
     /// cache; "stale" means it did reach it and the aggregator served its last good
-    /// reading. Everything sits on ONE line: stacked, they pushed the small layout past
-    /// the widget's height and iOS clipped the top and bottom rows away (2026-08-31).
+    /// reading. Full limits need no badge: every limit is on screen with its own colour.
     @ViewBuilder private var badges: some View {
-        let hits = meters.filter(\.atLimit).map(\.name)
         let note = entry.payload?.fromCache == true ? "offline"
                  : entry.payload?.stale == true ? "stale" : nil
-        if !hits.isEmpty || note != nil {
-            HStack(spacing: 5) {
-                if !hits.isEmpty {
-                    Text("FULL " + hits.joined(separator: ", "))
-                        .font(.system(size: 9, weight: .heavy))
-                        .foregroundStyle(UsageStyle.color(for: 100))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                }
-                if let note {
-                    Text(note)
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(UsageStyle.color(for: 75))
-                }
-            }
+        if let note {
+            Text(note)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(UsageStyle.color(for: 75))
         }
     }
 }

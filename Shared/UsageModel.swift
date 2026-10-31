@@ -492,6 +492,9 @@ struct Meter: Identifiable {
     var percent: Double?
     var resets: Date?
     var length: TimeInterval
+    /// Campbell's order: 0 the Claude plan, 1 the rest of Claude (Fable, a 5-hour session),
+    /// 2 single-model AGY pools such as Argon, 3 everything else.
+    var tier: Int = 3
 
     var id: String { name }
     var atLimit: Bool { (percent ?? 0) >= 100 }
@@ -516,8 +519,8 @@ struct Meter: Identifiable {
         return out < resets ? out : nil
     }
 
-    /// Usage projected to the reset at the rate so far: the ranking key, so a limit
-    /// that is filling fast outranks one that is fuller but nearly over.
+    /// Usage projected to the reset at the rate so far, so a limit that is filling fast
+    /// outranks one that is fuller but nearly over.
     func projected(now: Date = Date()) -> Double {
         let p = percent ?? 0
         guard let pace = pace(now: now), pace >= 10 else { return p }
@@ -544,15 +547,15 @@ extension UsagePayload {
         if claude?.ok == true, let l = claude?.limits {
             if let s = l.session {
                 m.append(Meter(name: "Claude 5h", color: UsageStyle.claude, percent: s.percent,
-                               resets: s.resetsDate, length: Meter.fiveHours))
+                               resets: s.resetsDate, length: Meter.fiveHours, tier: 1))
             }
             if let w = l.weeklyAll {
                 m.append(Meter(name: "Claude", color: UsageStyle.claude, percent: w.percent,
-                               resets: w.resetsDate, length: Meter.week))
+                               resets: w.resetsDate, length: Meter.week, tier: 0))
             }
             if let w = l.weeklyScoped {
                 m.append(Meter(name: w.model ?? "Claude scoped", color: UsageStyle.claude,
-                               percent: w.percent, resets: w.resetsDate, length: Meter.week))
+                               percent: w.percent, resets: w.resetsDate, length: Meter.week, tier: 1))
             }
         }
         if let g = grok, g.ok == true {
@@ -568,16 +571,18 @@ extension UsagePayload {
         if let ag = antigravity, ag.ok == true {
             for g in ag.groups ?? [] {
                 // "Claude and GPT models" -> "C+GPT", "Gemini Models" -> "Gemini",
-                // "Gemini 4 Argon" -> "Argon": the grey-blue colour says AGY.
+                // "Gemini 4 Argon" -> "Argon": the grey-blue colour says AGY. The shared
+                // pools are tier 3; a single-model pool (Argon, later Carbon) is tier 2.
                 let name = (g.name ?? "AGY")
                     .replacingOccurrences(of: "Claude and GPT models", with: "C+GPT")
                     .replacingOccurrences(of: " Models", with: "")
                     .replacingOccurrences(of: "Gemini 4 ", with: "")
                 m.append(Meter(name: name, color: UsageStyle.gemini, percent: g.weeklyUsed,
-                               resets: g.weeklyResetsDate, length: Meter.week))
+                               resets: g.weeklyResetsDate, length: Meter.week,
+                               tier: name == "C+GPT" || name == "Gemini" ? 3 : 2))
             }
         }
-        return m.sorted { $0.projected() > $1.projected() }
+        return m.sorted { ($0.tier, -$0.projected()) < ($1.tier, -$1.projected()) }
     }
 }
 
