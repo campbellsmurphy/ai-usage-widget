@@ -78,7 +78,7 @@ struct ContentView: View {
                     // Only providers the aggregator actually reports get a section, so a
                     // setup with two plans does not show four rows of "unavailable".
                     if let p = store.payload, p.claude == nil, p.grok == nil, p.codex == nil,
-                       p.antigravity == nil {
+                       p.muse == nil, p.antigravity == nil {
                         banner("The aggregator reports no providers. Configure at least one in its config.json.",
                                color: UsageStyle.color(for: 75))
                     }
@@ -131,7 +131,7 @@ struct ContentView: View {
         let claude = store.payload?.claude
         section("Claude", accent: UsageStyle.claude) {
             if let limits = claude?.limits, claude?.ok == true {
-                limitRow("5-hour session", limits.session)
+                if let session = limits.session { limitRow("5-hour session", session) }
                 limitRow("Weekly, all models", limits.weeklyAll)
                 limitRow(limits.weeklyScoped?.model.map { "Weekly, \($0)" } ?? "Weekly, scoped",
                          limits.weeklyScoped)

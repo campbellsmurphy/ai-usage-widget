@@ -27,7 +27,7 @@ struct UsageWidgetView: View {
                 if let limits = claude?.limits {
                     header("CLAUDE", color: UsageStyle.claude)
                     Spacer(minLength: 3)
-                    metric("5-hour", limits.session?.percent)
+                    if let session = limits.session { metric("5-hour", session.percent) }
                     metric("Weekly", limits.weeklyAll?.percent)
                     metric(limits.weeklyScoped?.model ?? "Scoped", limits.weeklyScoped?.percent)
                     Spacer(minLength: 5)
@@ -40,6 +40,9 @@ struct UsageWidgetView: View {
             }
             if hasCodex {
                 providerRow(codexLabel, codexPercent, UsageStyle.codex)
+            }
+            if hasMuse {
+                providerRow(museLabel, muse?.headline?.percent, UsageStyle.muse)
             }
             if hasAntigravity {
                 Spacer(minLength: 4)
@@ -61,7 +64,9 @@ struct UsageWidgetView: View {
                 if let limits = claude?.limits {
                     header("CLAUDE", color: UsageStyle.claude)
                     Spacer(minLength: 5)
-                    metric("5-hour", limits.session?.percent, reset: limits.session?.resetsDate)
+                    if let session = limits.session {
+                        metric("5-hour", session.percent, reset: session.resetsDate)
+                    }
                     metric("Weekly", limits.weeklyAll?.percent, reset: limits.weeklyAll?.resetsDate)
                     metric(limits.weeklyScoped?.model ?? "Scoped",
                            limits.weeklyScoped?.percent,
@@ -107,8 +112,7 @@ struct UsageWidgetView: View {
                     Spacer(minLength: 7)
                 }
                 if hasMuse {
-                    providerRow(muse?.headline?.label == "weekly" ? "MUSE wk" : "MUSE",
-                                muse?.headline?.percent, UsageStyle.muse)
+                    providerRow(museLabel, muse?.headline?.percent, UsageStyle.muse)
                     Spacer(minLength: 7)
                 }
                 if hasAntigravity {
@@ -141,7 +145,8 @@ struct UsageWidgetView: View {
         VStack(alignment: .leading, spacing: 1) {
             if let limits = claude?.limits {
                 Text("CLAUDE").font(.system(size: 10, weight: .heavy))
-                Text("wk \(UsageStyle.percentText(limits.weeklyAll?.percent))  ·  5h \(UsageStyle.percentText(limits.session?.percent))")
+                Text("wk \(UsageStyle.percentText(limits.weeklyAll?.percent))"
+                     + (limits.session.map { "  ·  5h \(UsageStyle.percentText($0.percent))" } ?? ""))
                     .font(.system(size: 13, weight: .semibold))
                 if let scoped = limits.weeklyScoped, let model = scoped.model {
                     Text("\(model) \(UsageStyle.percentText(scoped.percent))")
@@ -179,12 +184,16 @@ struct UsageWidgetView: View {
         guard let muse = entry.payload?.muse, muse.ok == true else { return nil }
         return muse
     }
-    private var hasAny: Bool { hasClaude || hasGrok || hasCodex || hasAntigravity }
+    private var museLabel: String {
+        muse?.headline?.label == "weekly" ? "MUSE wk" : "MUSE"
+    }
+    private var hasAny: Bool { hasClaude || hasGrok || hasCodex || hasMuse || hasAntigravity }
 
     private var headlineRows: [(String, Double?)] {
         var rows: [(String, Double?)] = []
         if hasGrok { rows.append(("Grok", grokPercent)) }
         if hasCodex { rows.append(("Codex", codexPercent)) }
+        if hasMuse { rows.append(("Muse", muse?.headline?.percent)) }
         if hasAntigravity { rows.append(("Gemini", ag?.gemini?.weeklyUsed)) }
         return rows
     }
