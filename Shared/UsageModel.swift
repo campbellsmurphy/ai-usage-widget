@@ -482,6 +482,105 @@ enum UsageCache {
     }
 }
 
+// MARK: - Meters
+
+/// One quota window, normalised across providers so the widgets can rank them and
+/// judge pace the same way.
+struct Meter: Identifiable {
+    var name: String
+    var color: Color
+    var percent: Double?
+    var resets: Date?
+    var length: TimeInterval
+
+    var id: String { name }
+    var atLimit: Bool { (percent ?? 0) >= 100 }
+
+    static let week: TimeInterval = 7 * 86_400
+    static let fiveHours: TimeInterval = 5 * 3_600
+
+    /// Where usage would sit now if spent evenly across the window.
+    func pace(now: Date = Date()) -> Double? {
+        guard let resets else { return nil }
+        let elapsed = length - resets.timeIntervalSince(now)
+        guard elapsed > 0, elapsed <= length else { return nil }
+        return elapsed / length * 100
+    }
+
+    /// When the window empties at the rate so far, if that lands before it resets.
+    /// Skipped in the first tenth of a window, where one session swings the rate wildly.
+    func runsOut(now: Date = Date()) -> Date? {
+        guard let p = percent, p > 0, p < 100, let resets,
+              let pace = pace(now: now), pace >= 10 else { return nil }
+        let out = now.addingTimeInterval(pace / 100 * length * (100 - p) / p)
+        return out < resets ? out : nil
+    }
+
+    /// Usage projected to the reset at the rate so far: the ranking key, so a limit
+    /// that is filling fast outranks one that is fuller but nearly over.
+    func projected(now: Date = Date()) -> Double {
+        let p = percent ?? 0
+        guard let pace = pace(now: now), pace >= 10 else { return p }
+        return min(p / pace * 100, 999)
+    }
+
+    /// "out Sun 2pm" ahead of a reset, else the reset itself.
+    func status(now: Date = Date()) -> String? {
+        if let out = runsOut(now: now) {
+            return "out " + (out.timeIntervalSince(now) >= 86_400
+                ? out.formatted(.dateTime.weekday(.abbreviated).hour())
+                : out.formatted(.dateTime.hour().minute()))
+        }
+        return UsageStyle.resetText(resets, now: now)
+    }
+}
+
+extension UsagePayload {
+    /// Every weekly limit, plus Claude's 5-hour session if the API reports one again.
+    /// Codex and Muse 5-hour windows stay in the app: on a glance surface they only
+    /// ever say "fine for now".
+    var meters: [Meter] {
+        var m: [Meter] = []
+        if claude?.ok == true, let l = claude?.limits {
+            if let s = l.session {
+                m.append(Meter(name: "Claude 5h", color: UsageStyle.claude, percent: s.percent,
+                               resets: s.resetsDate, length: Meter.fiveHours))
+            }
+            if let w = l.weeklyAll {
+                m.append(Meter(name: "Claude", color: UsageStyle.claude, percent: w.percent,
+                               resets: w.resetsDate, length: Meter.week))
+            }
+            if let w = l.weeklyScoped {
+                m.append(Meter(name: w.model ?? "Claude scoped", color: UsageStyle.claude,
+                               percent: w.percent, resets: w.resetsDate, length: Meter.week))
+            }
+        }
+        if let g = grok, g.ok == true {
+            m.append(Meter(name: "Grok", color: UsageStyle.label, percent: g.percent,
+                           resets: g.resetsDate, length: Meter.week))
+        }
+        for (name, color, usage) in [("Codex", UsageStyle.codex, codex), ("Muse", UsageStyle.muse, muse)] {
+            if let u = usage, u.ok == true, let w = u.headline {
+                m.append(Meter(name: name, color: color, percent: w.percent,
+                               resets: w.resetsDate, length: Meter.week))
+            }
+        }
+        if let ag = antigravity, ag.ok == true {
+            for g in ag.groups ?? [] {
+                // "Claude and GPT models" -> "C+GPT", "Gemini Models" -> "Gemini",
+                // "Gemini 4 Argon" -> "Argon": the grey-blue colour says AGY.
+                let name = (g.name ?? "AGY")
+                    .replacingOccurrences(of: "Claude and GPT models", with: "C+GPT")
+                    .replacingOccurrences(of: " Models", with: "")
+                    .replacingOccurrences(of: "Gemini 4 ", with: "")
+                m.append(Meter(name: name, color: UsageStyle.gemini, percent: g.weeklyUsed,
+                               resets: g.weeklyResetsDate, length: Meter.week))
+            }
+        }
+        return m.sorted { $0.projected() > $1.projected() }
+    }
+}
+
 // MARK: - Presentation
 
 enum UsageStyle {

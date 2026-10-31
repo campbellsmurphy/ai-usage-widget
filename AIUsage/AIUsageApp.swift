@@ -131,7 +131,7 @@ struct ContentView: View {
         let claude = store.payload?.claude
         section("Claude", accent: UsageStyle.claude) {
             if let limits = claude?.limits, claude?.ok == true {
-                if let session = limits.session { limitRow("5-hour session", session) }
+                if let session = limits.session { limitRow("5-hour session", session, length: Meter.fiveHours) }
                 limitRow("Weekly, all models", limits.weeklyAll)
                 limitRow(limits.weeklyScoped?.model.map { "Weekly, \($0)" } ?? "Weekly, scoped",
                          limits.weeklyScoped)
@@ -176,7 +176,8 @@ struct ContentView: View {
             if muse?.ok == true, let windows = muse?.windows, !windows.isEmpty {
                 ForEach(windows) { w in
                     bucketRow(w.label == "weekly" ? "Weekly limit" : "5-hour limit",
-                              w.percent, w.resetsDate, expected: nil, expectedWindows: nil)
+                              w.percent, w.resetsDate,
+                              length: w.label == "weekly" ? Meter.week : Meter.fiveHours)
                 }
                 if muse?.source == "web" {
                     Text("From dev.meta.ai while no 5-hour window is active (same counter as the CLI, checked 18 Oct).")
@@ -209,7 +210,8 @@ struct ContentView: View {
                 ForEach(windows) { w in
                     bucketRow(w.label == "weekly" ? "Weekly limit" : "5-hour limit",
                               w.percent, w.resetsDate, expected: w.expectedResetsDate,
-                              expectedWindows: w.expectedWindows)
+                              expectedWindows: w.expectedWindows,
+                              length: w.label == "weekly" ? Meter.week : Meter.fiveHours)
                 }
                 // Resets and paid credits do the same job here (more Codex once a window is
                 // spent), so they share one line. Only "redeem" is coloured: a reset that the
@@ -299,9 +301,11 @@ struct ContentView: View {
     /// Antigravity's own display.
     private func bucketRow(_ title: String, _ used: Double?, _ resets: Date?,
                            expected: Date? = nil, expectedWindows: Int? = nil,
-                           nilNote: String? = nil) -> some View {
+                           nilNote: String? = nil, length: TimeInterval = Meter.week) -> some View {
+        let m = Meter(name: title, color: UsageStyle.label, percent: used, resets: resets, length: length)
         var parts: [String] = []
         if let used { parts.append("\(Int((100 - used).rounded()))% left") }
+        if m.runsOut() != nil, let s = m.status() { parts.append(s + " at this rate") }
         if let text = UsageStyle.resetText(resets, expected: expected) { parts.append(text) }
         if let expected, let expectedWindows, expected > Date() {
             parts.append("est. from \(expectedWindows) windows")
@@ -310,8 +314,7 @@ struct ContentView: View {
             row(title: title,
                 subtitle: parts.isEmpty ? (nilNote ?? "no data") : parts.joined(separator: " · "),
                 percent: used)
-            ProgressView(value: min((used ?? 0) / 100, 1))
-                .tint(UsageStyle.color(for: used))
+            PaceBar(percent: used, pace: m.pace()).frame(height: 5)
         }
         .padding(.bottom, 6)
     }
@@ -438,13 +441,17 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func limitRow(_ title: String, _ limit: ClaudeUsage.Limit?) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private func limitRow(_ title: String, _ limit: ClaudeUsage.Limit?,
+                          length: TimeInterval = Meter.week) -> some View {
+        let m = Meter(name: title, color: UsageStyle.claude, percent: limit?.percent,
+                      resets: limit?.resetsDate, length: length)
+        let parts = [m.runsOut() != nil ? m.status().map { $0 + " at this rate" } : nil,
+                     UsageStyle.resetText(m.resets)].compactMap { $0 }
+        return VStack(alignment: .leading, spacing: 8) {
             row(title: title,
-                subtitle: UsageStyle.resetText(limit?.resetsDate) ?? "no reset time",
-                percent: limit?.percent)
-            ProgressView(value: min((limit?.percent ?? 0) / 100, 1))
-                .tint(UsageStyle.color(for: limit?.percent))
+                subtitle: parts.isEmpty ? "no reset time" : parts.joined(separator: " · "),
+                percent: m.percent)
+            PaceBar(percent: m.percent, pace: m.pace()).frame(height: 5)
         }
         .padding(.bottom, 6)
     }
