@@ -57,6 +57,9 @@ REDEEM_MIN_H   = 24    # a Codex reset credit is only worth spending with at lea
 CREDIT_WARN_H  = 72    # push once when a held credit is this close to expiring
 FROZEN_STATE   = os.path.join(BASE, "frozen-watch.json")
 FROZEN_ALERT_H = 2     # a row frozen this long is a real outage, not a Cloudflare burst
+FROZEN_RENOTIFY_H = 6  # keep saying so: one push at 06:33 was slept through on 2026-11-08
+TOKEN_STATE    = os.path.join(BASE, "token-watch.json")
+TOKEN_WARN_D   = (7, 2)  # push once at each of these days-remaining marks
 
 _cache = {"ts": 0.0, "data": None}
 # Pushed by the collector, which is the only machine that can reach Claude's token (when
@@ -536,6 +539,46 @@ def _advise_reset_credit(out, st, now):
     return {"count": n, "advice": advice, "warned_expiry": warned}
 
 
+def _watch_token_expiry():
+    """Push before the Claude refresh token's own expiry, not after.
+
+    The token runs about a month. When it lapsed on 2026-11-08 every surface that
+    depended on it signed out together, the collector fallback was dead for the same
+    reason, and the widget served a 17 h old reading. The expiry sits in the blob, so
+    it can be said in advance instead of discovered.
+    """
+    if "claude" not in PROVIDERS:
+        return
+    blob = kc_read()
+    if not blob:
+        return
+    o = blob.get("claudeAiOauth", blob)
+    exp = o.get("refreshTokenExpiresAt") if isinstance(o, dict) else None
+    if not exp:
+        return
+    days = (exp / 1000.0 - time.time()) / 86400.0
+    try:
+        st = json.load(open(TOKEN_STATE))
+    except Exception:
+        st = {}
+    if st.get("expiresAt") != exp:      # a fresh sign-in: start the warnings over
+        st = {"expiresAt": exp, "warned": []}
+    st.setdefault("warned", [])
+    for mark in TOKEN_WARN_D:
+        if days <= mark and mark not in st["warned"]:
+            when = datetime.datetime.fromtimestamp(exp / 1000).strftime("%a %d %b")
+            if _ntfy("Claude sign-in expires %s" % when,
+                     "The Claude refresh token on this machine lapses %s (%.1f days). "
+                     "Run `claude auth login` here before then, or the widget falls "
+                     "back to a stale reading." % (when, max(days, 0))):
+                st["warned"].append(mark)
+            break
+    try:
+        json.dump(st, open(TOKEN_STATE, "w"))
+    except Exception:
+        pass
+
+
 def _watch_frozen(out):
     """Push once when a provider row has been frozen (last-good replay, error, or stale
     collector) for FROZEN_ALERT_H, and once when it recovers. The widget only shows the
@@ -557,12 +600,15 @@ def _watch_frozen(out):
         prev = st.get(p) or {}
         if reason:
             since = prev.get("since") or now
-            alerted = prev.get("alerted", False)
-            if not alerted and now - since >= FROZEN_ALERT_H * 3600:
-                alerted = _ntfy("%s usage frozen" % p.capitalize(),
-                                "No fresh %s reading for %.1f h (%s). The widget is showing "
-                                "the last good value." % (p, (now - since) / 3600, reason))
-            st[p] = {"since": since, "reason": reason, "alerted": alerted}
+            last = prev.get("last_alert") or 0
+            if (now - since >= FROZEN_ALERT_H * 3600
+                    and now - last >= FROZEN_RENOTIFY_H * 3600
+                    and _ntfy("%s usage frozen" % p.capitalize(),
+                              "No fresh %s reading for %.1f h (%s). The widget is showing "
+                              "the last good value." % (p, (now - since) / 3600, reason))):
+                last = now
+            st[p] = {"since": since, "reason": reason,
+                     "last_alert": last, "alerted": bool(last)}
         else:
             if prev.get("alerted"):
                 _ntfy("%s usage recovered" % p.capitalize(),
@@ -650,6 +696,7 @@ def get_usage(force=False):
                 out["antigravity_stale"] = True
         _watch_resets(out)
         _watch_frozen(out)
+        _watch_token_expiry()
         _cache["ts"] = now
         _cache["data"] = out
         try:
