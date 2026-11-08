@@ -77,19 +77,43 @@ _diag  = {}
 def _sec(args):
     return subprocess.run(["security"] + args, capture_output=True, text=True, timeout=12)
 
+def _usable(blob):
+    """A blob the token path can actually use: a refresh token, or a live access token."""
+    if not isinstance(blob, dict):
+        return False
+    o = blob.get("claudeAiOauth", blob)
+    if not isinstance(o, dict):
+        return False
+    if o.get("refreshToken"):
+        return True
+    return bool(o.get("accessToken")) and (o.get("expiresAt") or 0) > time.time() * 1000
+
+
 def kc_read():
-    """Keychain first, then Claude Code's on-disk credentials file."""
+    """Keychain first, then Claude Code's on-disk credentials file.
+
+    Whichever store Claude Code last wrote wins, because it is the only side that
+    signs in now. Taking the keychain item unconditionally let a blanked one shadow
+    a good file for good: on 2026-11-08 the refresh token reached its expiry, the
+    keychain blob was left with an empty refreshToken, and the re-login wrote the
+    new credential to the file, so the aggregator reported signed_out indefinitely.
+    """
+    found = []
     try:
         raw = (_sec(["find-generic-password", "-s", KC_SERVICE, "-w"]).stdout or "").strip()
         if raw:
-            return json.loads(raw)
+            found.append(json.loads(raw))
     except Exception:
         pass
     try:
         with open(CRED_FILE) as f:
-            return json.load(f)
+            found.append(json.load(f))
     except Exception:
-        return None
+        pass
+    for blob in found:
+        if _usable(blob):
+            return blob
+    return found[0] if found else None
 
 def kc_account():
     try:
