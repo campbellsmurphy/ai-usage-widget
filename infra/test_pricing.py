@@ -40,6 +40,46 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(stderr.getvalue(), "".join(
             "WARNING: Unpriced model %s (1000 tokens)\n" % model for model in models))
 
+    @patch.object(collector, "fx_rate", return_value=(1.0, None, False))
+    def test_x5_generation_prices_from_its_own_row(self, _fx_rate):
+        """The rsplit fallback would bill these at their predecessor's higher rate."""
+        counts = {"input_tokens": 1_000_000, "output_tokens": 1_000_000,
+                  "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+        for model, expected in (("claude-opus-5-5", 24.0), ("claude-sonnet-5-5", 12.0),
+                                ("claude-haiku-5-5", 0.6)):
+            with self.subTest(model=model), redirect_stderr(io.StringIO()) as stderr:
+                result = collector.price({model: counts})
+                self.assertEqual(result["total"], expected)
+                self.assertEqual(result["unpriced"], [])
+                self.assertEqual(stderr.getvalue(), "")
+
+    @patch.object(collector, "fx_rate", return_value=(1.0, None, False))
+    def test_cache_read_multiplier_per_model(self, _fx_rate):
+        counts = {"input_tokens": 0, "output_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 1_000_000}
+        for model, expected in (("claude-opus-5-5", 0.2),      # 0.05x of 4.00
+                                ("claude-sonnet-5-5", 0.1),    # 0.05x of 2.00
+                                ("claude-fable-5-1", 0.25),    # 0.025x of 10.00
+                                ("claude-opus-5", 0.5),        # 0.1x of 5.00
+                                ("claude-haiku-5-5", 0.01)):   # 0.1x of 0.10
+            with self.subTest(model=model):
+                result = collector.price({model: counts})
+                self.assertEqual(result["total"], expected)
+                self.assertEqual(result["by_type"]["cache_read"], expected)
+
+    @patch.object(collector, "fx_rate", return_value=(1.0, None, False))
+    def test_dated_snapshot_inherits_base_and_multiplier(self, _fx_rate):
+        counts = {"input_tokens": 1_000_000, "output_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 1_000_000}
+        with redirect_stderr(io.StringIO()) as stderr:
+            result = collector.price({"claude-opus-5-5-20260401": counts})
+        self.assertEqual(result["unpriced"], [])
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(result["by_type"]["input"], 4.0)
+        self.assertEqual(result["by_type"]["cache_read"], 0.2)
+
 
 if __name__ == "__main__":
     unittest.main()

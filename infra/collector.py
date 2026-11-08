@@ -284,7 +284,8 @@ def fetch_codex():
 
 
 # USD per million tokens, list price. Cache write is 1.25x input (5-minute TTL,
-# the default Claude Code uses); cache read is 0.1x input.
+# the default Claude Code uses); cache read is 0.1x input except where
+# CACHE_READ_MULT_OVERRIDE says otherwise.
 PRICING = {
     # OpenAI standard tier, short context, verified 2026-09-06 at
     # developers.openai.com/api/docs/pricing. Cached input is 0.1x and cache writes
@@ -306,17 +307,35 @@ PRICING = {
     "gemini-3.7-flash":  (0.75, 3.75),
     "gemini-3.6-flash":  (0.75, 3.75),
     "gemini-3.1-pro":    (2.0, 12.0),
+    # Claude rows verified 2026-11-08 at platform.claude.com/docs/en/about-claude/pricing.
+    # The x-5 generation is listed explicitly: the rsplit fallback would otherwise
+    # resolve e.g. claude-opus-5-5 to claude-opus-5 and bill it at the older,
+    # higher rate.
+    "claude-fable-5-1":  (10.0, 50.0),
     "claude-fable-5":    (10.0, 50.0),
+    "claude-opus-5-5":   (4.0, 20.0),
     "claude-opus-5":     (5.0, 25.0),
     "claude-opus-4-8":   (5.0, 25.0),
     "claude-opus-4-7":   (5.0, 25.0),
     "claude-opus-4-6":   (5.0, 25.0),
+    "claude-sonnet-5-5": (2.0, 10.0),
     "claude-sonnet-5":   (2.0, 10.0),
     "claude-sonnet-4-6": (3.0, 15.0),
+    # Haiku 5.5 is tiered by prompt size (0.50/2.50 over 100K tokens). The scan
+    # records no per-request prompt size, and Claude Code's Haiku calls are short
+    # auxiliary ones, so the up-to-100K rate is used.
+    "claude-haiku-5-5":  (0.10, 0.50),
     "claude-haiku-4-5":  (1.0, 5.0),
 }
 CACHE_WRITE_MULT = 1.25
 CACHE_READ_MULT = 0.1
+# Models whose cache hits are priced below the usual 0.1x of base input.
+CACHE_READ_MULT_OVERRIDE = {
+    "claude-opus-5-5":   0.05,
+    "claude-sonnet-5-5": 0.05,
+    "claude-fable-5-1":  0.025,
+    "claude-mythos-5-1": 0.025,
+}
 
 
 FX_CACHE = os.path.join(STATE_DIR, "fx.json")
@@ -366,11 +385,14 @@ def price(bymodel):
                   file=sys.stderr)
             continue
         inp, outp = base
+        read_mult = (CACHE_READ_MULT_OVERRIDE.get(model)
+                     or CACHE_READ_MULT_OVERRIDE.get(model.rsplit("-", 1)[0])
+                     or CACHE_READ_MULT)
         parts = {
             "input": c["input_tokens"] / 1e6 * inp,
             "output": c["output_tokens"] / 1e6 * outp,
             "cache_write": c["cache_creation_input_tokens"] / 1e6 * inp * CACHE_WRITE_MULT,
-            "cache_read": c["cache_read_input_tokens"] / 1e6 * inp * CACHE_READ_MULT,
+            "cache_read": c["cache_read_input_tokens"] / 1e6 * inp * read_mult,
         }
         for k, v in parts.items():
             per_type[k] += v
@@ -387,10 +409,12 @@ def price(bymodel):
     rows.sort(key=lambda r: -r["cost"])
 
     if CURRENCY == "USD":
-        basis = "list API rates in USD; cache write 1.25x input (5-min TTL), cache read 0.1x"
+        basis = ("list API rates in USD; cache write 1.25x input (5-min TTL), "
+                 "cache read 0.1x (0.05x Opus/Sonnet 5.5, 0.025x Fable 5.1)")
     else:
         basis = ("list API rates converted at %.4f USD/%s (%s); "
-                 "cache write 1.25x input (5-min TTL), cache read 0.1x"
+                 "cache write 1.25x input (5-min TTL), cache read 0.1x "
+                 "(0.05x Opus/Sonnet 5.5, 0.025x Fable 5.1)"
                  % (fx, CURRENCY, as_of or "unknown"))
     if stale:
         basis = "STALE RATE - " + basis
