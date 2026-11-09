@@ -254,7 +254,31 @@ def fetch_claude():
     return {"ok": True,
             "five_hour": (b.get("five_hour") or {}).get("utilization"),
             "seven_day": (b.get("seven_day") or {}).get("utilization"),
-            "limits": limits}
+            "limits": limits, "limit_reset": _claude_limit_reset(tok)}
+
+
+def _claude_limit_reset(tok):
+    """Promotional usage-limit resets (model-launch grants). Read here as well as in the
+    collector: when this machine's own token wins, a collector that cannot authenticate
+    pushes no limit_reset at all, and the app then renders held resets as none.
+    Only reported to a caller that identifies as the CLI: anything else gets
+    eligible false, reason "surface", and an empty grant list."""
+    req = urllib.request.Request(
+        "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1",
+        headers={"Authorization": "Bearer " + tok,
+                 "anthropic-beta": "oauth-2025-04-20",
+                 "anthropic-version": "2023-06-01",
+                 "User-Agent": "claude-cli/2.1.280 (external, cli)"})
+    try:
+        c = json.loads(urllib.request.urlopen(req, timeout=20).read()).get("cedar_ember") or {}
+    except Exception:
+        return None
+    grants = [g for g in c.get("grants") or [] if (g.get("resets_left") or 0) > 0]
+    if not grants:
+        return {"left": 0}
+    g = min(grants, key=lambda g: g.get("ends_at") or "9")
+    return {"left": sum(x["resets_left"] for x in grants), "label": g.get("label"),
+            "expires_at": g.get("ends_at"), "usable_now": bool(g.get("usable_now"))}
 
 GROK_URL = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig"
 
@@ -651,10 +675,11 @@ def get_usage(force=False):
             out["claude_error"] = claude["error"]
             out["stale"] = True
 
-        # The reset grant is only read by the collector, so carry it across even when this
-        # machine's own Claude reading wins.
+        # Both ends read the reset grant now, so fall back to the collector's reading only
+        # when this machine's own grant call failed.
         lr = (_pushed["claude"] or {}).get("limit_reset")
-        if lr is not None and (out.get("claude") or {}).get("ok") and "limit_reset" not in out["claude"]:
+        if lr is not None and (out.get("claude") or {}).get("ok") \
+                and out["claude"].get("limit_reset") is None:
             out["claude"] = dict(out["claude"], limit_reset=lr)
 
         if _pushed["tokens"]:

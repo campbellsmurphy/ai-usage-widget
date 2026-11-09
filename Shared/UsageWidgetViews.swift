@@ -151,7 +151,7 @@ struct UsageWidgetView: View {
     /// The banked extras that change what to do next: a Claude reset or a Codex credit.
     @ViewBuilder private var extras: some View {
         if let n = entry.payload?.claude?.limitReset?.left, n > 0 {
-            Text("Claude: \(n) reset banked")
+            Text("Claude: \(n) \(n == 1 ? "reset" : "resets") banked")
                 .font(.system(size: 9))
                 .foregroundStyle(UsageStyle.faint)
         }
