@@ -56,42 +56,16 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    if let error = store.error {
-                        banner(error, color: UsageStyle.color(for: 100))
-                    }
-                    if let hits = store.payload?.atLimit, !hits.isEmpty {
-                        banner("AT LIMIT: " + hits.joined(separator: ", "),
-                               color: UsageStyle.color(for: 100))
-                    }
-                    if store.payload?.fromCache == true {
-                        banner(offlineMessage, color: UsageStyle.color(for: 75))
-                    } else if store.payload?.stale == true {
-                        banner(staleMessage, color: UsageStyle.color(for: 75))
-                    }
-                    if store.payload?.claudeSource != nil {
-                        banner("Claude is being relayed from the collector because the aggregator can't authenticate"
-                               + (store.payload?.claudeError.map { " (\($0))" } ?? "")
-                               + ". Fresh while the collector is awake.", color: UsageStyle.gemini)
-                    }
-
-                    // Only providers the aggregator actually reports get a section, so a
-                    // setup with two plans does not show four rows of "unavailable".
-                    if let p = store.payload, p.claude == nil, p.grok == nil, p.codex == nil,
-                       p.muse == nil, p.antigravity == nil {
-                        banner("The aggregator reports no providers. Configure at least one in its config.json.",
-                               color: UsageStyle.color(for: 75))
-                    }
-                    if store.payload?.claude != nil { claudeSection }
-                    if store.payload?.grok != nil { grokSection }
-                    if store.payload?.codex != nil { codexSection }
-                    if store.payload?.muse != nil { museSection }
-                    if store.payload?.antigravity != nil { antigravitySection }
-                    historyLink
+                VStack(alignment: .leading, spacing: 14) {
+                    faults
+                    claudeCard
+                    resetsCard
+                    plansCard
+                    tokensCard
                     widgetPreviewSection
                     footer
                 }
-                .padding(20)
+                .padding(16)
             }
             .background(UsageStyle.background)
             .navigationTitle("AI Usage")
@@ -111,6 +85,31 @@ struct ContentView: View {
         .task { await store.load() }
     }
 
+    // MARK: Faults
+
+    /// Only what needs action or changes how far to trust the numbers. Which machine
+    /// supplied a healthy reading is footer material.
+    @ViewBuilder private var faults: some View {
+        if let error = store.error {
+            banner(error, color: UsageStyle.color(for: 100))
+        }
+        if let hits = store.payload?.atLimit, !hits.isEmpty {
+            banner("At limit: " + hits.joined(separator: ", "), color: UsageStyle.color(for: 100))
+        }
+        if store.payload?.fromCache == true {
+            banner(offlineMessage, color: UsageStyle.color(for: 75))
+        } else if store.payload?.stale == true {
+            banner(staleMessage, color: UsageStyle.color(for: 75))
+        }
+        // Only providers the aggregator actually reports get a row, so a setup with two
+        // plans does not show four rows of "unavailable".
+        if let p = store.payload, p.claude == nil, p.grok == nil, p.codex == nil,
+           p.muse == nil, p.antigravity == nil {
+            banner("The aggregator reports no providers. Configure at least one in its config.json.",
+                   color: UsageStyle.color(for: 75))
+        }
+    }
+
     /// The phone could not reach the aggregator at all. The old wording blamed the
     /// aggregator for what is a route problem at this end (off the tailnet, or another
     /// VPN holding iOS's single tunnel slot), which points at the wrong machine.
@@ -125,292 +124,264 @@ struct ContentView: View {
         return "Aggregator is serving a cached reading\(reason). These numbers may not be current."
     }
 
-    // MARK: Sections
+    // MARK: Cards
 
-    @ViewBuilder private var claudeSection: some View {
-        let claude = store.payload?.claude
-        section("Claude", accent: UsageStyle.claude) {
-            if let limits = claude?.limits, claude?.ok == true {
-                if let session = limits.session { limitRow("5-hour session", session, length: Meter.fiveHours) }
-                limitRow("Weekly, all models", limits.weeklyAll)
-                limitRow(limits.weeklyScoped?.model.map { "Weekly, \($0)" } ?? "Weekly, scoped",
-                         limits.weeklyScoped)
-                if let r = claude?.limitReset, let n = r.left, n > 0 {
-                    Text("\(n) limit \(n == 1 ? "reset" : "resets") banked (\(r.label ?? "promotional"))")
-                        .font(.caption2)
-                        .foregroundStyle(UsageStyle.faint)
-                    if let exp = r.expiresAt.flatMap(UsageDate.parse) {
-                        Text("Expires \(exp.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()))")
-                            .font(.caption2)
+    @ViewBuilder private var claudeCard: some View {
+        if let claude = store.payload?.claude {
+            card {
+                HStack(alignment: .firstTextBaseline) {
+                    heading("Claude", UsageStyle.claude)
+                    Spacer()
+                    if let updated = store.payload?.updatedDate {
+                        Text("as at \(updated.formatted(date: .omitted, time: .shortened))")
+                            .font(.caption)
                             .foregroundStyle(UsageStyle.faint)
                     }
                 }
-            } else {
-                Text(claude?.error ?? "No Claude data")
-                    .font(.callout)
-                    .foregroundStyle(UsageStyle.color(for: 100))
-            }
-        }
-    }
-
-    @ViewBuilder private var grokSection: some View {
-        section("Grok", accent: UsageStyle.label) {
-            let grok = store.payload?.grok
-            row(title: grok?.window == "weekly" ? "Weekly SuperGrok" : "Grok",
-                subtitle: grokSubtitle,
-                percent: (grok?.ok == true) ? grok?.percent : nil)
-        }
-    }
-
-    private var grokSubtitle: String {
-        guard let grok = store.payload?.grok, grok.ok == true else { return "Unavailable" }
-        var parts: [String] = []
-        if let p = grok.percent { parts.append("\(Int((100 - p).rounded()))% left") }
-        if let text = UsageStyle.resetText(grok.resetsDate) { parts.append(text) }
-        return parts.isEmpty ? "Weekly SuperGrok limit" : parts.joined(separator: " · ")
-    }
-
-    @ViewBuilder private var museSection: some View {
-        let muse = store.payload?.muse
-        section(muse?.plan.map { "Muse Code (\($0))" } ?? "Muse Code", accent: UsageStyle.muse) {
-            if muse?.ok == true, let windows = muse?.windows, !windows.isEmpty {
-                ForEach(windows) { w in
-                    bucketRow(w.label == "weekly" ? "Weekly limit" : "5-hour limit",
-                              w.percent, w.resetsDate,
-                              length: w.label == "weekly" ? Meter.week : Meter.fiveHours)
-                }
-                if muse?.source == "web" {
-                    Text("From dev.meta.ai while no 5-hour window is active (same counter as the CLI, checked 18 Oct).")
-                        .font(.caption2)
-                        .foregroundStyle(UsageStyle.faint)
-                }
-                if let muse, muse.frozen {
-                    Text(muse.error == "keychain_prompt" || muse.error == "keychain_denied"
-                         ? "Muse login needs Keychain approval on the collector (Always Allow)."
-                         : "Muse unreachable (\(muse.error ?? "unknown")), frozen \(muse.readingAge.map(UsageStyle.ageText) ?? "some time") ago.")
-                        .font(.caption2)
-                        .foregroundStyle(UsageStyle.color(for: 95))
-                } else if store.payload?.museStale == true {
-                    Text("Collector offline, these may be stale.")
-                        .font(.caption2)
-                        .foregroundStyle(UsageStyle.color(for: 75))
-                }
-            } else {
-                Text("Muse unavailable (\(muse?.error ?? "unknown"))")
-                    .font(.callout)
-                    .foregroundStyle(UsageStyle.faint)
-            }
-        }
-    }
-
-    @ViewBuilder private var codexSection: some View {
-        let codex = store.payload?.codex
-        section(codex?.plan.map { "Codex (ChatGPT \($0))" } ?? "Codex", accent: UsageStyle.codex) {
-            if codex?.ok == true, let windows = codex?.windows, !windows.isEmpty {
-                ForEach(windows) { w in
-                    bucketRow(w.label == "weekly" ? "Weekly limit" : "5-hour limit",
-                              w.percent, w.resetsDate, expected: w.expectedResetsDate,
-                              expectedWindows: w.expectedWindows,
-                              length: w.label == "weekly" ? Meter.week : Meter.fiveHours)
-                }
-                // Resets and paid credits do the same job here (more Codex once a window is
-                // spent), so they share one line. Only "redeem" is coloured: a reset that the
-                // window rolling on its own is about to make pointless is a reason to wait.
-                if let codex {
-                    let n = codex.resetCredits ?? 0
-                    let paid = codex.credits.map { $0.unlimited == true || ($0.balance ?? 0) > 0 } ?? false
-                    let held = [n > 0 ? "\(n) \(n == 1 ? "reset" : "resets")" : nil,
-                                paid ? codex.credits!.text : nil].compactMap { $0 }
-                    let hours = codex.resetCreditBackInHours.map { String(format: "%.0f h", $0) } ?? "soon"
-                    let advice: String? = switch (n, codex.resetCreditAdvice) {
-                    case (0, _): nil
-                    case (_, "redeem"): "worth using: \(hours) left in a spent window"
-                    case (_, "bank"): "bank it: window rolls itself in \(hours)"
-                    default: "usable once a window is spent"
+                if claude.ok == true, let limits = claude.limits {
+                    let week = Meter(name: "Claude", color: UsageStyle.claude, percent: limits.weeklyAll?.percent,
+                                     resets: limits.weeklyAll?.resetsDate, length: Meter.week)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(UsageStyle.percentText(week.percent))
+                                .font(.system(size: 56, weight: .bold, design: .rounded))
+                                .foregroundStyle(UsageStyle.color(for: week.percent))
+                                .monospacedDigit()
+                            Text("of the week used")
+                                .font(.subheadline)
+                                .foregroundStyle(UsageStyle.label)
+                        }
+                        PaceBar(percent: week.percent, pace: week.pace()).frame(height: 8)
+                        detail(week, size: .subheadline)
+                        if let pace = week.pace() {
+                            Text("The tick on each bar is even pace, \(Int(pace.rounded()))% by now.")
+                                .font(.caption)
+                                .foregroundStyle(UsageStyle.faint)
+                        }
                     }
-                    let expiry = codex.resetCreditExpiresAt.flatMap(UsageDate.parse)
-                        .map { "expires \($0.formatted(.dateTime.day().month(.abbreviated)))" }
-                    let overage = codex.credits?.overageLimitReached == true ? "overage limit reached" : nil
-                    Text("Resets & credits: " + (held.isEmpty ? "none" :
-                         ([held.joined(separator: " + "), advice, expiry, overage].compactMap { $0 })
-                            .joined(separator: " · ")))
-                        .font(.caption2)
-                        .foregroundStyle(codex.resetCreditAdvice == "redeem" ? UsageStyle.codex : UsageStyle.faint)
+                    if let s = limits.session {
+                        limitRow(Meter(name: "5-hour session", color: UsageStyle.claude, percent: s.percent,
+                                       resets: s.resetsDate, length: Meter.fiveHours), quiet: false)
+                    }
+                    if let scoped = limits.weeklyScoped {
+                        limitRow(Meter(name: scoped.model ?? "Scoped model", color: UsageStyle.claude,
+                                       percent: scoped.percent, resets: scoped.resetsDate, length: Meter.week),
+                                 quiet: false)
+                    }
+                } else {
+                    Text(claude.error ?? "No Claude data")
+                        .font(.callout)
+                        .foregroundStyle(UsageStyle.color(for: 100))
                 }
-                if let codex, codex.frozen {
-                    Text(codex.frozenNote)
-                        .font(.caption2)
-                        .foregroundStyle(UsageStyle.color(for: 95))
-                } else if store.payload?.codexStale == true {
-                    Text("Collector offline, these may be stale.")
-                        .font(.caption2)
-                        .foregroundStyle(UsageStyle.color(for: 75))
+            }
+        }
+    }
+
+    @ViewBuilder private var resetsCard: some View {
+        let resets = store.payload?.bankedResets ?? []
+        if !resets.isEmpty {
+            card {
+                heading("Resets banked", UsageStyle.label)
+                ForEach(resets) { r in
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(r.plan)
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(UsageStyle.label)
+                            Text(([r.note.prefix(1).uppercased() + r.note.dropFirst()]
+                                  + (r.expires.map { ["expires " + $0.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))] } ?? []))
+                                .joined(separator: " · "))
+                                .font(.footnote)
+                                .foregroundStyle(r.urgent ? UsageStyle.codex : UsageStyle.faint)
+                        }
+                        Spacer(minLength: 8)
+                        Text("\(r.count)")
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(r.urgent ? UsageStyle.codex : Color(white: 0.92))
+                            .monospacedDigit()
+                    }
                 }
+            }
+        }
+    }
+
+    /// Every plan other than Claude, in the same order as the widget.
+    @ViewBuilder private var plansCard: some View {
+        let plans = (store.payload?.meters ?? []).filter { $0.tier > 1 }
+        let notes = planNotes
+        if !plans.isEmpty || !notes.isEmpty {
+            card {
+                heading("Other plans", UsageStyle.label)
+                ForEach(plans) { limitRow($0, quiet: true) }
+                ForEach(notes, id: \.0) { text, color in
+                    Text(text)
+                        .font(.caption)
+                        .foregroundStyle(color)
+                }
+            }
+        }
+    }
+
+    /// What a row cannot say for itself: a provider with no reading, a frozen or stale
+    /// one, and where an unusual reading came from.
+    private var planNotes: [(String, Color)] {
+        guard let p = store.payload else { return [] }
+        let red = UsageStyle.color(for: 100), amber = UsageStyle.color(for: 75)
+        var notes: [(String, Color)] = []
+        if let g = p.grok, g.ok != true { notes.append(("Grok unavailable.", red)) }
+        if let c = p.codex {
+            if c.ok != true || c.headline == nil {
+                notes.append(("Codex unavailable (\(c.error ?? "unknown")).", red))
+            } else if c.frozen {
+                notes.append((c.frozenNote, red))
+            } else if p.codexStale == true {
+                notes.append(("Codex: collector offline, may be stale.", amber))
+            }
+            if let credits = c.credits, credits.unlimited == true || (credits.balance ?? 0) > 0 {
+                notes.append(("Codex paid credits: \(credits.text)"
+                              + (credits.overageLimitReached == true ? ", overage limit reached." : "."),
+                              UsageStyle.faint))
+            }
+        }
+        if let m = p.muse {
+            if m.ok != true || m.headline == nil {
+                notes.append(("Muse unavailable (\(m.error ?? "unknown")).", red))
+            } else if m.frozen {
+                notes.append((m.error == "keychain_prompt" || m.error == "keychain_denied"
+                              ? "Muse login needs Keychain approval on the collector (Always Allow)."
+                              : "Muse unreachable (\(m.error ?? "unknown")), frozen \(m.readingAge.map(UsageStyle.ageText) ?? "some time") ago.",
+                              red))
+            } else if p.museStale == true {
+                notes.append(("Muse: collector offline, may be stale.", amber))
+            } else if m.source == "web" {
+                notes.append(("Muse is read from dev.meta.ai while no 5-hour window is active.", UsageStyle.faint))
+            }
+        }
+        if let a = p.antigravity {
+            if a.ok != true {
+                notes.append((a.error == "not_running" ? "Antigravity is not running, no reading yet."
+                              : "Antigravity unavailable (\(a.error ?? "unknown")).", red))
             } else {
-                Text("Codex unavailable (\(codex?.error ?? "unknown"))")
-                    .font(.callout)
-                    .foregroundStyle(UsageStyle.color(for: 100))
-            }
-        }
-    }
-
-    @ViewBuilder private var antigravitySection: some View {
-        let ag = store.payload?.antigravity
-        section("AGY", accent: UsageStyle.gemini) {
-            Text("Antigravity's own quota, separate from the Claude plan and Codex above. "
-                 + "Percentages here are USED. Antigravity's own Models screen shows the "
-                 + "inverse (what is left), so 0% used there reads as 100%.")
-                .font(.caption2)
-                .foregroundStyle(UsageStyle.faint)
-
-            if ag?.ok == true {
-                let cgWeekly = ag?.thirdParty?.weeklyUsed
-                let cgWeeklyMaxed = (cgWeekly ?? 0) >= 100
-                bucketRow("AGY Claude + GPT pool, weekly", cgWeekly, ag?.thirdParty?.weeklyResetsDate)
-                // Once the weekly is exhausted the 5-hour bucket can't be spent, so its
-                // 0%-used reading is meaningless, so show n/a rather than a fresh-looking bucket.
-                bucketRow("AGY Claude + GPT pool, 5-hour",
-                          cgWeeklyMaxed ? nil : ag?.thirdParty?.fiveHourUsed,
-                          nil,
-                          nilNote: cgWeeklyMaxed ? "weekly maxed" : nil)
-                Divider().overlay(UsageStyle.faint.opacity(0.3))
-                bucketRow("AGY Gemini pool, weekly", ag?.gemini?.weeklyUsed, ag?.gemini?.weeklyResetsDate)
-                bucketRow("AGY Gemini pool, 5-hour", ag?.gemini?.fiveHourUsed, nil)
-                if let ag, ag.frozen {
-                    Text(ag.frozenNote)
-                        .font(.caption2)
-                        .foregroundStyle(UsageStyle.color(for: 95))
-                } else if store.payload?.antigravityStale == true {
-                    Text("Collector offline, these may be stale.")
-                        .font(.caption2)
-                        .foregroundStyle(UsageStyle.color(for: 75))
+                if a.frozen {
+                    notes.append((a.frozenNote, red))
+                } else if p.antigravityStale == true {
+                    notes.append(("Antigravity: collector offline, may be stale.", amber))
                 }
-            } else {
-                // No cached reading to fall back on either, so there is genuinely
-                // nothing to show.
-                Text(ag?.error == "not_running"
-                     ? "Antigravity is not running, no reading yet."
-                     : "Antigravity unavailable (\(ag?.error ?? "unknown"))")
-                    .font(.callout)
-                    .foregroundStyle(UsageStyle.color(for: 100))
+                notes.append(("Antigravity rows show used. Its own Models screen shows what is left.",
+                              UsageStyle.faint))
             }
         }
+        return notes
     }
 
-    /// Shows used and left together, so this screen can never look like it contradicts
-    /// Antigravity's own display.
-    private func bucketRow(_ title: String, _ used: Double?, _ resets: Date?,
-                           expected: Date? = nil, expectedWindows: Int? = nil,
-                           nilNote: String? = nil, length: TimeInterval = Meter.week) -> some View {
-        let m = Meter(name: title, color: UsageStyle.label, percent: used, resets: resets, length: length)
-        var parts: [String] = []
-        if let used { parts.append("\(Int((100 - used).rounded()))% left") }
-        if m.runsOut() != nil, let s = m.status() { parts.append(s + " at this rate") }
-        if let text = UsageStyle.resetText(resets, expected: expected) { parts.append(text) }
-        if let expected, let expectedWindows, expected > Date() {
-            parts.append("est. from \(expectedWindows) windows")
-        }
-        return VStack(alignment: .leading, spacing: 8) {
-            row(title: title,
-                subtitle: parts.isEmpty ? (nilNote ?? "no data") : parts.joined(separator: " · "),
-                percent: used)
-            PaceBar(percent: used, pace: m.pace()).frame(height: 5)
-        }
-        .padding(.bottom, 6)
-    }
-
-    /// One link per source that keeps a token log on disk. All four do: agy stores its
-    /// per-call usage inside protobuf step metadata, which the collector decodes.
-    @ViewBuilder private var historyLink: some View {
-        if let ct = store.payload?.costTotal, let total = ct.total {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("All sources, if billed at API rates")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(UsageStyle.label)
-                    Text(ct.parts?.keys.contains("grok_tokens") == true
-                         ? "Grok's share is the CLI's own accounting; the rest is counterfactual."
-                         : "Counterfactual: flat-rate plans paid none of this.")
-                        .font(.caption2)
-                        .foregroundStyle(UsageStyle.faint)
+    /// Today and the last seven days per source, each row opening that source's history.
+    /// All four keep a token log on disk: agy stores its per-call usage inside protobuf
+    /// step metadata, which the collector decodes.
+    @ViewBuilder private var tokensCard: some View {
+        let p = store.payload
+        let sources: [(String, TokenUsage?, String, String)] = [
+            ("Claude Code", p?.tokens, "messages",
+             "Claude Code sessions on the collector machine only: not claude.ai."),
+            ("Codex", p?.codexTokens, "turns",
+             "Codex CLI sessions on the collector machine only, read from its "
+             + "session rollouts. Not the ChatGPT app. Cost uses OpenAI's published "
+             + "standard-tier list prices."),
+            ("Grok", p?.grokTokens, "turns",
+             "Grok CLI sessions on the collector machine only, read from its "
+             + "session update logs. Not grok.com chat. Cost is the figure the Grok "
+             + "CLI records itself per turn."),
+            ("Antigravity", p?.agyTokens, "calls",
+             "agy (Antigravity CLI) and Antigravity IDE conversations on the "
+             + "collector machine, decoded from their step metadata. Model names "
+             + "come from a code table mapped by test runs; unmapped codes are "
+             + "listed by number and left unpriced. Cost uses Gemini API and "
+             + "Anthropic list prices."),
+        ].filter { $0.1?.ok == true }
+        if !sources.isEmpty {
+            card {
+                HStack(alignment: .firstTextBaseline, spacing: 0) {
+                    heading("Tokens", UsageStyle.label)
+                    Spacer()
+                    Group {
+                        Text("Today")
+                        Text("7 days")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(UsageStyle.faint)
+                    .frame(width: 68, alignment: .trailing)
+                    Color.clear.frame(width: 20, height: 1)
                 }
-                Spacer(minLength: 8)
-                Text(UsageStyle.money(total, currency: ct.currency ?? "AUD"))
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(UsageStyle.claude)
-                    .monospacedDigit()
-            }
-            .padding(14)
-            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
-        }
-        if let t = store.payload?.tokens, t.ok == true {
-            historyRow(t, title: "Claude Code token history", unit: "messages",
-                       caveat: "Claude Code sessions on the collector machine only: not claude.ai.")
-        }
-        if let t = store.payload?.codexTokens, t.ok == true {
-            historyRow(t, title: "Codex token history", unit: "turns",
-                       caveat: "Codex CLI sessions on the collector machine only, read from its "
-                             + "session rollouts. Not the ChatGPT app. Cost uses OpenAI's published "
-                             + "standard-tier list prices.")
-        }
-        if let t = store.payload?.grokTokens, t.ok == true {
-            historyRow(t, title: "Grok token history", unit: "turns",
-                       caveat: "Grok CLI sessions on the collector machine only, read from its "
-                             + "session update logs. Not grok.com chat. Cost is the figure the Grok "
-                             + "CLI records itself per turn.")
-        }
-        if let t = store.payload?.agyTokens, t.ok == true {
-            historyRow(t, title: "AGY token history", unit: "calls",
-                       caveat: "agy (Antigravity CLI) and Antigravity IDE conversations on the "
-                             + "collector machine, decoded from their step metadata. Model names "
-                             + "come from a code table mapped by test runs; unmapped codes are "
-                             + "listed by number and left unpriced. Cost uses Gemini API and "
-                             + "Anthropic list prices.")
-        }
-    }
-
-    private func historyRow(_ t: TokenUsage, title: String, unit: String, caveat: String) -> some View {
-        NavigationLink {
-            TokenHistoryView(tokens: t, title: title, unit: unit, caveat: caveat)
-        } label: {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(UsageStyle.label)
-                    Text("\(UsageStyle.compact(t.billed)) tokens · \(UsageStyle.grouped(t.messages)) \(unit)")
-                        .font(.caption2)
-                        .foregroundStyle(UsageStyle.faint)
+                ForEach(sources, id: \.0) { name, tokens, unit, caveat in
+                    NavigationLink {
+                        TokenHistoryView(tokens: tokens!, title: "\(name) token history", unit: unit, caveat: caveat)
+                    } label: {
+                        HStack(spacing: 0) {
+                            Text(name)
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(UsageStyle.label)
+                            Spacer()
+                            ForEach([1, 7], id: \.self) { n in
+                                let v = tokens!.billed(lastDays: n)
+                                Text(UsageStyle.compact(v))
+                                    .font(.body.weight(.semibold))
+                                    .foregroundStyle(v == 0 ? UsageStyle.faint : Color(white: 0.92))
+                                    .monospacedDigit()
+                                    .frame(width: 68, alignment: .trailing)
+                            }
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(UsageStyle.faint)
+                                .frame(width: 20, alignment: .trailing)
+                        }
+                        .frame(minHeight: 36)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
-                Spacer()
-                Image(systemName: "chevron.right").foregroundStyle(UsageStyle.faint)
+                if let ct = p?.costTotal, let total = ct.total {
+                    Divider().overlay(UsageStyle.faint.opacity(0.3))
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("All time, at API rates")
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(UsageStyle.label)
+                            Text(ct.parts?.keys.contains("grok_tokens") == true
+                                 ? "Not a bill. Grok's share is the CLI's own accounting; the rest is counterfactual."
+                                 : "Not a bill: flat-rate plans paid none of this.")
+                                .font(.caption)
+                                .foregroundStyle(UsageStyle.faint)
+                        }
+                        Spacer(minLength: 8)
+                        Text(UsageStyle.money(total, currency: ct.currency ?? "AUD"))
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(UsageStyle.claude)
+                            .monospacedDigit()
+                    }
+                }
             }
-            .padding(14)
-            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
         }
     }
 
     /// Frames match WidgetKit's real sizes on a Pro Max class phone (170 square, 364 x 170
-    /// medium), inset by the same 12pt the widget itself uses. The old 158 / 338 frames
-    /// were a guess and clipped the bottom row of both previews.
+    /// medium), inset by the same padding the widget itself uses.
     private var widgetPreviewSection: some View {
-        section("Widget preview", accent: UsageStyle.label) {
+        VStack(alignment: .leading, spacing: 12) {
+            heading("Widget preview", UsageStyle.faint)
             let entry = UsageEntry(date: Date(), payload: store.payload, error: store.error)
-            let mediumWidth = min(364, UIScreen.main.bounds.width - 40)
+            let mediumWidth = min(364, UIScreen.main.bounds.width - 32)
             HStack(alignment: .top, spacing: 16) {
-                widgetChrome(width: 170, height: 170) {
+                widgetChrome(width: 170, height: 170, padding: UsageStyle.widgetPadding) {
                     UsageWidgetView(entry: entry, family: .small)
                 }
-                VStack(alignment: .leading, spacing: 16) {
-                    widgetChrome(width: 172, height: 76) {
-                        UsageWidgetView(entry: entry, family: .rectangular)
-                    }
+                widgetChrome(width: 172, height: 76, padding: 12) {
+                    UsageWidgetView(entry: entry, family: .rectangular)
                 }
             }
-            widgetChrome(width: mediumWidth, height: 170) {
+            widgetChrome(width: mediumWidth, height: 170, padding: UsageStyle.widgetPadding) {
                 UsageWidgetView(entry: entry, family: .medium)
             }
         }
+        .padding(.top, 8)
     }
 
     private var footer: some View {
@@ -422,72 +393,90 @@ struct ContentView: View {
                 Text("Fetched: \(fetched.formatted(date: .omitted, time: .standard))")
             }
             Text("Source: \(UsageConfig.host)")
+            // Normal several times a day: the aggregator's own token lapses between
+            // Claude Code runs on its host and the collector's reading takes over.
+            if store.payload?.claudeSource != nil {
+                Text("Claude reading relayed by the collector"
+                     + (store.payload?.claudeError.map { " (aggregator: \($0))" } ?? "")
+                     + ". Fresh while the collector is awake.")
+            }
         }
-        .font(.caption2)
+        .font(.caption)
         .foregroundStyle(UsageStyle.faint)
     }
 
     // MARK: Building blocks
 
-    private func section<Content: View>(_ title: String,
-                                        accent: Color,
-                                        @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title.uppercased())
-                .font(.caption.weight(.heavy))
-                .foregroundStyle(accent)
-            content()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    private func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 14) { content() }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
     }
 
-    private func limitRow(_ title: String, _ limit: ClaudeUsage.Limit?,
-                          length: TimeInterval = Meter.week) -> some View {
-        let m = Meter(name: title, color: UsageStyle.claude, percent: limit?.percent,
-                      resets: limit?.resetsDate, length: length)
-        let parts = [m.runsOut() != nil ? m.status().map { $0 + " at this rate" } : nil,
-                     UsageStyle.resetText(m.resets)].compactMap { $0 }
-        return VStack(alignment: .leading, spacing: 8) {
-            row(title: title,
-                subtitle: parts.isEmpty ? "no reset time" : parts.joined(separator: " · "),
-                percent: m.percent)
-            PaceBar(percent: m.percent, pace: m.pace()).frame(height: 5)
-        }
-        .padding(.bottom, 6)
+    private func heading(_ title: String, _ color: Color) -> some View {
+        Text(title.uppercased())
+            .font(.footnote.weight(.heavy))
+            .foregroundStyle(color)
     }
 
-    private func row(title: String, subtitle: String, percent: Double?) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.subheadline.weight(.medium))
+    /// One limit: name and number, bar, then what is left and when it resets.
+    private func limitRow(_ m: Meter, quiet: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(m.name == "C+GPT" ? "Claude + GPT" : m.name)
+                    .font(.body.weight(.medium))
                     .foregroundStyle(UsageStyle.label)
-                Text(subtitle)
-                    .font(.caption2)
-                    .foregroundStyle(UsageStyle.faint)
+                if let plan = m.plan {
+                    Text(plan)
+                        .font(.caption)
+                        .foregroundStyle(UsageStyle.faint)
+                }
+                Spacer(minLength: 8)
+                Text(UsageStyle.percentText(m.percent))
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(quiet ? UsageStyle.quietColor(for: m.percent) : UsageStyle.color(for: m.percent))
+                    .monospacedDigit()
             }
-            Spacer(minLength: 8)
-            Text(UsageStyle.percentText(percent))
-                .font(.title3.weight(.bold))
-                .foregroundStyle(UsageStyle.color(for: percent))
-                .monospacedDigit()
+            PaceBar(percent: m.percent, pace: m.pace()).frame(height: 5)
+            detail(m, size: .footnote)
+        }
+    }
+
+    /// "34% left · resets Sun 1:59 am", with a run-out warning on its own line.
+    @ViewBuilder private func detail(_ m: Meter, size: Font) -> some View {
+        let reset = m.expectedResets.map { _ in UsageStyle.resetText(m.resets, expected: m.expectedResets) }
+            ?? UsageStyle.resetLong(m.resets)
+        let parts = [m.percent.map { "\(Int((100 - $0).rounded()))% left" },
+                     reset,
+                     m.expectedResets.flatMap { $0 > Date() ? m.expectedWindows.map { "est. from \($0) windows" } : nil },
+                     m.fiveHour.map { "5-hour \(UsageStyle.percentText($0))" },
+                     m.fiveHourNote].compactMap { $0 }
+        Text(parts.isEmpty ? "no data" : parts.joined(separator: " · "))
+            .font(size)
+            .foregroundStyle(UsageStyle.faint)
+        if m.runsOut() != nil, let s = m.status() {
+            Text("Runs \(s) at this rate")
+                .font(size.weight(.semibold))
+                .foregroundStyle(UsageStyle.color(for: 75))
         }
     }
 
     private func banner(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(.caption)
+            .font(.footnote)
             .foregroundStyle(color)
-            .padding(10)
+            .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+            .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func widgetChrome<Content: View>(width: CGFloat,
                                              height: CGFloat,
+                                             padding: CGFloat,
                                              @ViewBuilder content: () -> Content) -> some View {
         content()
-            .padding(12)
+            .padding(padding)
             .frame(width: width, height: height, alignment: .topLeading)
             .background(UsageStyle.background)
             .clipShape(RoundedRectangle(cornerRadius: 22))

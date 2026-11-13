@@ -39,6 +39,7 @@ struct AIUsageWidgetEntryView: View {
 
     var body: some View {
         UsageWidgetView(entry: entry, family: family)
+            .padding(family == .rectangular ? 0 : UsageStyle.widgetPadding)
             .containerBackground(UsageStyle.background, for: .widget)
     }
 
@@ -59,6 +60,9 @@ struct AIUsageWidget: Widget {
         .configurationDisplayName("AI Usage")
         .description("How much of each AI plan has been used.")
         .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular])
+        // The system inset is 16pt and differs by size; one fixed inset keeps the app's
+        // preview frames true to the home screen.
+        .contentMarginsDisabled()
     }
 }
 

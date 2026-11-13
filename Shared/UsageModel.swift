@@ -393,6 +393,16 @@ struct TokenUsage: Decodable {
         }
     }
 
+    /// Billed tokens over the last `n` calendar days, today included.
+    func billed(lastDays n: Int, now: Date = Date()) -> Int {
+        let cal = Calendar.current
+        guard let from = cal.date(byAdding: .day, value: 1 - n, to: cal.startOfDay(for: now)) else { return 0 }
+        return (days ?? []).reduce(0) { sum, day in
+            guard let date = day.date, date >= from else { return sum }
+            return sum + day.billed
+        }
+    }
+
     var modelsSorted: [(String, Int)] {
         (models ?? [:]).sorted { $0.value > $1.value }
     }
@@ -495,6 +505,12 @@ struct Meter: Identifiable {
     /// Campbell's order: 0 the Claude plan, 1 the rest of Claude (Fable, a 5-hour session),
     /// 2 single-model AGY pools such as Argon, 3 everything else.
     var tier: Int = 3
+    /// The plan behind the limit ("ChatGPT Plus"), and the plan's short window, for the app.
+    var plan: String? = nil
+    var fiveHour: Double? = nil
+    var fiveHourNote: String? = nil
+    var expectedResets: Date? = nil
+    var expectedWindows: Int? = nil
 
     var id: String { name }
     var atLimit: Bool { (percent ?? 0) >= 100 }
@@ -560,12 +576,17 @@ extension UsagePayload {
         }
         if let g = grok, g.ok == true {
             m.append(Meter(name: "Grok", color: UsageStyle.label, percent: g.percent,
-                           resets: g.resetsDate, length: Meter.week))
+                           resets: g.resetsDate, length: Meter.week,
+                           plan: g.window == "weekly" ? "SuperGrok" : nil))
         }
         for (name, color, usage) in [("Codex", UsageStyle.codex, codex), ("Muse", UsageStyle.muse, muse)] {
             if let u = usage, u.ok == true, let w = u.headline {
+                let plan = name == "Codex" ? u.plan.map { "ChatGPT \($0.capitalized)" }
+                                           : u.plan?.replacingOccurrences(of: "Muse Code ", with: "")
                 m.append(Meter(name: name, color: color, percent: w.percent,
-                               resets: w.resetsDate, length: Meter.week))
+                               resets: w.resetsDate, length: Meter.week, plan: plan,
+                               fiveHour: u.windows?.first { $0.label == "5-hour" }?.percent,
+                               expectedResets: w.expectedResetsDate, expectedWindows: w.expectedWindows))
             }
         }
         if let ag = antigravity, ag.ok == true {
@@ -577,12 +598,54 @@ extension UsagePayload {
                     .replacingOccurrences(of: "Claude and GPT models", with: "C+GPT")
                     .replacingOccurrences(of: " Models", with: "")
                     .replacingOccurrences(of: "Gemini 4 ", with: "")
+                // Once the weekly is spent the 5-hour bucket cannot be used, so its
+                // 0% reading would look like a fresh bucket.
+                let maxed = (g.weeklyUsed ?? 0) >= 100
                 m.append(Meter(name: name, color: UsageStyle.gemini, percent: g.weeklyUsed,
                                resets: g.weeklyResetsDate, length: Meter.week,
-                               tier: name == "C+GPT" || name == "Gemini" ? 3 : 2))
+                               tier: name == "C+GPT" || name == "Gemini" ? 3 : 2,
+                               plan: "Antigravity",
+                               fiveHour: maxed ? nil : g.fiveHourUsed,
+                               fiveHourNote: maxed && g.fiveHourUsed != nil ? "5-hour n/a, weekly maxed" : nil))
             }
         }
-        return m.sorted { ($0.tier, -$0.projected()) < ($1.tier, -$1.projected()) }
+        // Fixed places within a tier: a glance finds Codex where it was last time.
+        return m.enumerated().sorted { ($0.element.tier, $0.offset) < ($1.element.tier, $1.offset) }
+            .map(\.element)
+    }
+}
+
+/// A banked early reset: more of a plan on demand, so it changes what to do next.
+struct BankedReset: Identifiable {
+    var plan: String
+    var count: Int
+    var note: String
+    var expires: Date?
+    /// Worth spending now, not merely held.
+    var urgent = false
+    var id: String { plan }
+}
+
+extension UsagePayload {
+    var bankedResets: [BankedReset] {
+        var r: [BankedReset] = []
+        if let c = claude?.limitReset, let n = c.left, n > 0 {
+            r.append(BankedReset(plan: "Claude", count: n,
+                                 note: c.usableNow == false ? "not usable yet" : "usable now",
+                                 expires: c.expiresAt.flatMap(UsageDate.parse)))
+        }
+        if let c = codex, c.ok == true, let n = c.resetCredits, n > 0 {
+            let hours = c.resetCreditBackInHours.map { String(format: "%.0f h", $0) } ?? "soon"
+            let note = switch c.resetCreditAdvice {
+            case "redeem": "worth using, \(hours) left in a spent window"
+            case "bank": "hold, the window rolls itself in \(hours)"
+            default: "usable once a window is spent"
+            }
+            r.append(BankedReset(plan: "Codex", count: n, note: note,
+                                 expires: c.resetCreditExpiresAt.flatMap(UsageDate.parse),
+                                 urgent: c.resetCreditAdvice == "redeem"))
+        }
+        return r
     }
 }
 
@@ -595,13 +658,22 @@ enum UsageStyle {
     static let codex = Color(red: 0.427, green: 0.800, blue: 0.667)
     static let muse = Color(red: 0.353, green: 0.549, blue: 1.0)
     static let label = Color(white: 0.81)
-    static let faint = Color(white: 0.44)
+    static let widgetPadding: CGFloat = 14
+    /// Secondary text. Was 0.44, under 4:1 on this background at 9 to 11pt.
+    static let faint = Color(white: 0.60)
 
     static func color(for percent: Double?) -> Color {
         guard let percent else { return Color(white: 0.47) }
         if percent >= 90 { return Color(red: 0.898, green: 0.282, blue: 0.302) }
         if percent >= 70 { return Color(red: 0.961, green: 0.651, blue: 0.137) }
         return Color(red: 0.290, green: 0.753, blue: 0.478)
+    }
+
+    /// For a side plan: grey while untouched, plain while fine, coloured once it is worth
+    /// a look. Six green zeros in a row hide the one number that matters.
+    static func quietColor(for percent: Double?) -> Color {
+        guard let percent, percent >= 1 else { return faint }
+        return percent >= 70 ? color(for: percent) : Color(white: 0.92)
     }
 
     static func percentText(_ percent: Double?) -> String {
@@ -614,6 +686,15 @@ enum UsageStyle {
         guard let date else { return nil }
         if date <= now { return "reset due" }
         return "resets \(whenText(date, now: now))"
+    }
+
+    /// "resets Sun 1:59 am": the app has room for the hour the widget leaves out.
+    static func resetLong(_ date: Date?, now: Date = Date()) -> String? {
+        guard let date else { return nil }
+        if date <= now { return "reset due" }
+        return "resets " + (date.timeIntervalSince(now) >= 86_400
+            ? date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+            : date.formatted(.dateTime.hour().minute()))
     }
 
     /// The bare "7pm" / "Sat" half of `resetText`, for composing.
