@@ -44,6 +44,7 @@ AGG_WATCH = os.path.join(STATE_DIR, "aggregator-watch.json")
 AGG_ALERT_H = 2      # the aggregator watches the collector the same way, so match its threshold
 AGG_GAP = 2700       # a longer gap between runs is the M5 asleep, not a continuous outage
 CREDS = os.path.expanduser("~/.claude/.credentials.json")
+CLAUDE_BIN = os.path.expanduser("~/.local/bin/claude")
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 
 _noverify = ssl.create_default_context()
@@ -51,12 +52,32 @@ _noverify.check_hostname = False
 _noverify.verify_mode = ssl.CERT_NONE
 
 
+def _read_claude_oauth():
+    blob = json.load(open(CREDS))
+    return blob.get("claudeAiOauth", blob)
+
+
+def _refresh_claude_cli():
+    """The desktop app does not refresh the CLI's token, so with no terminal session it lapses
+    (2026-11-19). A one-turn Haiku prompt makes the CLI refresh and write its own file."""
+    try:
+        subprocess.run([CLAUDE_BIN, "-p", "reply ok", "--model", "haiku", "--max-turns", "1"],
+                       cwd=STATE_DIR, capture_output=True, timeout=120)
+    except Exception:
+        pass
+
+
 def fetch_claude():
     try:
-        blob = json.load(open(CREDS))
+        o = _read_claude_oauth()
     except Exception:
         return {"error": "no_credentials_file"}
-    o = blob.get("claudeAiOauth", blob)
+    if o.get("accessToken") and (o.get("expiresAt") or 0) <= time.time() * 1000:
+        _refresh_claude_cli()
+        try:
+            o = _read_claude_oauth()
+        except Exception:
+            return {"error": "no_credentials_file"}
     tok = o.get("accessToken")
     if not tok:
         return {"error": "no_access_token"}
@@ -1143,9 +1164,7 @@ def _ntfy(title, msg):
     if not NTFY_URL:
         return False
     try:
-        urllib.request.urlopen(urllib.request.Request(
-            NTFY_URL, data=msg.encode(), headers={"Title": title, "Tags": "warning"}), timeout=15)
-        return True
+        return subprocess.run([os.path.expanduser("~/.local/bin/notify"), "-g", "warning", title, msg]).returncode == 0
     except Exception:
         return False
 
