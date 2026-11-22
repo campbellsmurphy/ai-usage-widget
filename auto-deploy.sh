@@ -227,7 +227,7 @@ alert() {
     log "ALERT: $1"
     STAMP="$HOME/.ai-usage-deploy/last-alert"
     if [ ! -e "$STAMP" ] || [ $(( $(date +%s) - $(stat -f %m "$STAMP") )) -gt 21600 ]; then
-        osascript -e "display notification \"$1\" with title \"AI Usage deploy\"" >/dev/null 2>&1
+        "$HOME/.local/bin/notify" "AI Usage deploy" "$1"
         touch "$STAMP"
     fi
 }

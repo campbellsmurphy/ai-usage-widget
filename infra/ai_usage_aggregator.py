@@ -432,10 +432,7 @@ def _ntfy(title, msg):
     if not NTFY_URL:
         return False
     try:
-        req = urllib.request.Request(NTFY_URL, data=msg.encode(),
-                                     headers={"Title": title, "Tags": "unlock"})
-        urllib.request.urlopen(req, timeout=15)
-        return True
+        return subprocess.run([os.path.expanduser("~/.local/bin/notify"), "-g", "unlock", title, msg]).returncode == 0
     except Exception:
         return False
 
