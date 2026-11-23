@@ -26,7 +26,7 @@ Config lives in ~/.ai-usage-collector/config.json:
 Leave a provider out of the list and its key is never pushed, so the phone shows no
 row for it rather than an error.
 """
-import json, os, re, ssl, subprocess, sys, time, urllib.request, urllib.error
+import glob, json, os, re, ssl, subprocess, sys, time, urllib.request, urllib.error
 
 STATE_DIR = os.path.expanduser("~/.ai-usage-collector")
 os.makedirs(STATE_DIR, exist_ok=True)
@@ -126,6 +126,22 @@ def _claude_limit_reset(tok):
             "expires_at": g.get("ends_at"), "usable_now": bool(g.get("usable_now"))}
 
 
+AG_DAEMON_DIR = os.path.expanduser("~/.gemini/antigravity/daemon")
+
+
+def _antigravity_daemon(pid):
+    """Antigravity 2.34 no longer passes --csrf_token; it writes one hub_<port>.json per
+    launch and leaves the old ones behind, so match on the live pid."""
+    for f in glob.glob(os.path.join(AG_DAEMON_DIR, "hub_*.json")):
+        try:
+            d = json.load(open(f))
+        except Exception:
+            continue
+        if str(d.get("pid")) == str(pid) and d.get("httpsPort") and d.get("csrfToken"):
+            return str(d["httpsPort"]), d["csrfToken"]
+    return None, None
+
+
 def _antigravity_endpoint():
     """The language server picks a fresh port and CSRF token on every launch."""
     pid = subprocess.run(["pgrep", "-f", "language_server --standalone"],
@@ -137,7 +153,7 @@ def _antigravity_endpoint():
                          capture_output=True, text=True).stdout
     m = re.search(r"--csrf_token\s+(\S+)", cmd)
     if not m:
-        return None, None
+        return _antigravity_daemon(pid)
     ports = subprocess.run(["lsof", "-nP", "-a", "-p", pid, "-iTCP", "-sTCP:LISTEN"],
                            capture_output=True, text=True).stdout
     p = re.findall(r"127\.0\.0\.1:(\d+)", ports)
